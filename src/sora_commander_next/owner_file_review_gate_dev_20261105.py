@@ -16,6 +16,7 @@ from time import monotonic
 from .owner_file_review_localized_dev_20261104 import bound_proposal
 from .windows_job import WindowsJob
 from .windows_session_events import OwnerSessionEventLatch
+from .owner_dialog_integrity import DIALOG_INTEGRITY
 
 DEV_ONLY = True
 NOT_REGISTERED = True
@@ -54,6 +55,7 @@ def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=OWNER_UI_LOCALE)
         latch.verify()
         if not DIALOG_SCRIPT.is_file() or not DIALOG_SCRIPT.is_absolute():
             raise PermissionError("trusted Owner dialog missing")
+        DIALOG_INTEGRITY.verify()
         job = WindowsJob()
         child = subprocess.Popen(
             [sys.executable, "-I", "-X", "utf8", str(DIALOG_SCRIPT)],

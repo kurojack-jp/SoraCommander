@@ -620,7 +620,7 @@ Use to preview one literal exact-text source replacement against the expected SH
                 try:
                     fields = ("source", "destination") if operation == "move_file" else ("path",)
                     for field in fields:
-                        host.policy.require_full_path(arguments.get(field))
+                        host.policy.require_write_path(arguments.get(field))
                 except (OSError, ValueError, TypeError):
                     return {"status": "REJECTED", "outcome": "NOT_STARTED",
                             "error": "DevOperationFailed", "retry_allowed": False}
@@ -666,7 +666,7 @@ Use to preview one literal exact-text source replacement against the expected SH
         def request_text_edit(path: Annotated[str, Field(description="Path to the target within the already-configured Owner read/edit roots; path alone grants no access.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")], expected_sha256: Annotated[str, Field(description="Expected 64-character lowercase SHA-256 of current file content; stale values must fail.")]) -> dict[str, Any]:
             """Submit one full-content text replacement for local Owner review after inspecting the SHA-bound preview. Can write on Owner approval; never call twice after timeout. Use edit_review_status/await_edit_result with pending_id."""
             try:
-                host.policy.require_full_path(path)
+                host.policy.require_write_path(path)
                 return pilot.request(path, content, expected_sha256)
             except StalePreviewError:
                 return {"status": "ERROR", "error": "STALE_SHA256"}
@@ -707,7 +707,7 @@ Use after a pending edit/create review to wait for that same decision/outcome. N
             def request_text_create(path: Annotated[str, Field(description="Proposed new file path in permitted Owner edit scope; must not overwrite.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")]) -> dict[str, Any]:
                 """Submit one new text file creation for local Owner review. Only enabled in the explicit DEV edit pilot; do not overwrite existing files or resubmit an uncertain result. Prefer preview_source_create first."""
                 try:
-                    host.policy.require_full_path(path)
+                    host.policy.require_write_path(path)
                     return pilot.request_create(path, content)
                 except Exception:
                     return {'status': 'ERROR', 'error': 'CREATE_REJECTED'}

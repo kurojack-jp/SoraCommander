@@ -120,6 +120,19 @@ def command_caution(*, executable, argv, locale="ja"):
 
     if basename in _INTERPRETERS:
         add("ATTENTION", "runtime")
+    if ntpath.splitext(basename)[1] in {".bat", ".cmd"}:
+        add("ATTENTION", "runtime")
+    if basename == "conhost.exe" and any(
+            ntpath.basename(arg.replace("/", "\\")).casefold() in _SHELLS
+            for arg in argv):
+        add("ATTENTION", "nested")
+        if "push" in joined.casefold():
+            add("STRONG", "git_danger")
+    if basename in {"python.exe", "pythonw.exe"} and any(
+            arg == "-c" and index + 1 < len(argv)
+            and "push" in argv[index + 1].casefold()
+            for index, arg in enumerate(argv)):
+        add("STRONG", "git_danger")
     if basename in _SYSTEM:
         add("ATTENTION", "system")
     if basename in _SHELLS and flags.intersection(_SHELL_INLINE):

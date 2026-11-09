@@ -74,6 +74,13 @@ class DevBrokerHost(BrokerHost):
                 self.policy.require_full_path(arguments.get(field))
         except (OSError, ValueError, TypeError):
             return {"status": "DENY", "error": "FullScopeRequired"}
+        try:
+            for field in fields.get(action, ()):
+                if field != "cwd":
+                    self.policy.require_write_path(arguments.get(field))
+        except (OSError, ValueError, TypeError):
+            return {"status": "REJECTED", "outcome": "NOT_STARTED",
+                    "error": "RunningInstallWriteDenied", "retry_allowed": False}
         return super()._call(action, **arguments)
 
 
@@ -99,7 +106,7 @@ class OwnerBrokerBackend:
             try:
                 fields = ("source", "destination") if operation == "move_file" else ("path",)
                 for field in fields:
-                    self._host.policy.require_full_path(arguments.get(field))
+                    self._host.policy.require_write_path(arguments.get(field))
             except (OSError, ValueError, TypeError):
                 return {"status": "REJECTED", "outcome": "NOT_STARTED",
                         "error": "DevOperationFailed", "retry_allowed": False}
@@ -126,7 +133,7 @@ class OwnerBrokerBackend:
     def request_text_edit(self, *, path, content, expected_sha256):
         # The same fixed results as the MCP adapter gives in one process today.
         try:
-            self._host.policy.require_full_path(path)
+            self._host.policy.require_write_path(path)
             return self._pilot().request(path, content, expected_sha256)
         except StalePreviewError:
             return {"status": "ERROR", "error": "STALE_SHA256"}
@@ -135,7 +142,7 @@ class OwnerBrokerBackend:
 
     def request_text_create(self, *, path, content):
         try:
-            self._host.policy.require_full_path(path)
+            self._host.policy.require_write_path(path)
             return self._pilot().request_create(path, content)
         except Exception:
             return {"status": "ERROR", "error": "CREATE_REJECTED"}

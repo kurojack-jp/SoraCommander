@@ -19,6 +19,7 @@ from time import monotonic
 from .windows_job import WindowsJob
 from .windows_owner_controller import WindowsOwnerController, review_diagnostics
 from .windows_session_events import OwnerSessionEventLatch
+from .owner_dialog_integrity import DIALOG_INTEGRITY
 
 DEV_ONLY = True
 NOT_REGISTERED = True
@@ -85,6 +86,7 @@ class LocalizedOwnerApprovalBrokerDev:
             path=DIALOG_SCRIPT
             if not path.is_file() or not path.is_absolute():
                 raise PermissionError("trusted Owner dialog missing")
+            DIALOG_INTEGRITY.verify()
             job=WindowsJob()
             child=subprocess.Popen(
                 [sys.executable,"-I","-X","utf8",str(path)],

@@ -17,6 +17,9 @@ Include what you did, what you expected, and what happened. Do not include keys 
 
 ## What it does not protect against
 
+- **Files in allowed folders.** File tools read any non-denied file without a window and can send it to ChatGPT. The deny list checks names, so files such as `appsettings.json`, `web.config` or `config.yaml` holding passwords or connection strings can be read. Do not allow folders that hold them.
+- **Approved command output.** It goes to ChatGPT without being shown in the window.
+- **A shared ChatGPT connector.** Other workspace members may be able to use the read tools. Do not share it. This OpenAI-side behaviour has not been verified.
 - **A command you approved.** The window shows what will run. It cannot tell you whether that is wise.
 - **Other programs under your own Windows account.** They can read the key file, edit the launch records, and change this code. Keep the checkout in a folder only you can write to.
 - **Your account with OpenAI or ChatGPT.** Anyone who controls it can send requests, though they still need your approval window.

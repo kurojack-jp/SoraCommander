@@ -462,6 +462,13 @@ class ConnectionScopeTests(NoRealDialogTestCase):
 
     def test_only_dev_rdc_compat_imports_the_gate_or_the_child(self):
         for path in SOURCE.glob("*.py"):
+            if path.name == "owner_dialog_integrity.py":
+                # Hashing a child filename is not importing or executing it.
+                names = self.names_used(path.name)
+                self.assertFalse({"owner_file_review_gate_dev_20261105", "owner_file_dialog_localized",
+                                  "importlib", "__import__", "exec", "eval", "compile",
+                                  "spec_from_file_location", "exec_module", "Popen"} & names)
+                continue
             if path.name in ("owner_file_review_gate_dev_20261105.py", "owner_file_dialog_localized.py",
                              "release_inventory.py", "dev_rdc_compat.py"):
                 continue

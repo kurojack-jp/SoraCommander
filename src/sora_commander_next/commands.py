@@ -6,6 +6,10 @@ from uuid import uuid4
 import math
 
 
+class BatchArgumentMetacharacterRejected(ValueError):
+    """Batch files cannot safely receive cmd.exe metacharacters as arguments."""
+
+
 def absolute(value: str) -> str:
     if not isinstance(value, str) or not value or "\0" in value:
         raise ValueError("path must be a nonempty string")
@@ -30,6 +34,11 @@ class Command:
             raise ValueError("interactive must be a boolean")
         if not isinstance(self.argv, (list, tuple)) or len(self.argv) > 128:
             raise ValueError("argv must be a list or tuple of at most 128 strings")
+        resolved_executable = absolute(self.executable)
+        if (Path(resolved_executable).suffix.casefold() in {".bat", ".cmd"}
+                and any(isinstance(arg, str) and any(c in arg for c in '&|<>^%!"\r\n\0')
+                        for arg in self.argv)):
+            raise BatchArgumentMetacharacterRejected("unsafe batch argument metacharacter")
         if any(not isinstance(a, str) or "\0" in a or len(a) > 8192 for a in self.argv):
             raise ValueError("invalid argv element")
         if type(self.timeout) not in (int, float) or not math.isfinite(self.timeout) or not 0.01 <= self.timeout <= 3600:
@@ -39,5 +48,5 @@ class Command:
         if not isinstance(self.request_id, str) or not 1 <= len(self.request_id) <= 128:
             raise ValueError("invalid request ID")
         object.__setattr__(self, "argv", tuple(self.argv))
-        object.__setattr__(self, "executable", absolute(self.executable))
+        object.__setattr__(self, "executable", resolved_executable)
         object.__setattr__(self, "cwd", absolute(self.cwd))

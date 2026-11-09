@@ -152,11 +152,23 @@ class BrokerHost:
         return self._call("previous_output", **({"session_id": session_id} if session_id else {}))
 
     def request_source_create(self, path, content, expected_new_sha256, request_id):
+        from .policy import require_install_write_path
+        try:
+            require_install_write_path(path)
+        except (OSError, ValueError, TypeError):
+            return {"status": "REJECTED", "outcome": "NOT_STARTED",
+                    "error": "RunningInstallWriteDenied", "retry_allowed": False}
         return self._call("request_source_create", path=path, content=content,
                           expected_new_sha256=expected_new_sha256, request_id=request_id)
 
     def request_source_patch(self, path, old_text, new_text, expected_sha256,
                              expected_new_sha256, request_id):
+        from .policy import require_install_write_path
+        try:
+            require_install_write_path(path)
+        except (OSError, ValueError, TypeError):
+            return {"status": "REJECTED", "outcome": "NOT_STARTED",
+                    "error": "RunningInstallWriteDenied", "retry_allowed": False}
         return self._call("request_source_patch", path=path, old_text=old_text,
                           new_text=new_text, expected_sha256=expected_sha256,
                           expected_new_sha256=expected_new_sha256, request_id=request_id)

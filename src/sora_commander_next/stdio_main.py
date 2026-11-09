@@ -86,7 +86,9 @@ Write-Output 'OWNER_ACL_OK'
         except (OSError, ValueError) as exc:
             raise RuntimeError("Owner ACL unavailable") from exc
         try:
-            result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+            from .cli_monitor_bootstrap import _system_executable
+            powershell = _system_executable("WindowsPowerShell", "v1.0", "powershell.exe")
+            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive",
                                      "-Command", script], capture_output=True,
                                     timeout=10, env=env, text=True)
         except (OSError, subprocess.TimeoutExpired) as exc:

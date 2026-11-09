@@ -32,6 +32,18 @@ def within(cwd: str, root: str) -> bool:
     return Path(cwd).is_relative_to(Path(root))
 
 
+def require_install_write_path(path):
+    """Deny edits to this running installation, independent of allowed roots."""
+    import sora_commander_next
+    package = Path(sora_commander_next.__file__).resolve().parent
+    checkout = package.parent.parent if package.parent.name == "src" else package.parent
+    target = Path(absolute(path))
+    if (target.is_relative_to(package)
+            or target.is_relative_to(checkout / "tools")
+            or target == checkout / "pyproject.toml"):
+        raise PermissionError("running installation is not writable by file tools")
+
+
 @dataclass(frozen=True)
 class Pattern:
     executable: str
@@ -83,6 +95,10 @@ class Policy:
         resolved = absolute(path)
         if not any(within(resolved, root) for root in self.roots):
             raise PermissionError("full-access folder required")
+
+    def require_write_path(self, path):
+        self.require_full_path(path)
+        require_install_write_path(path)
 
     @locked
     def add_grant_local(self, grant: Grant):

@@ -311,6 +311,12 @@ class SourceReviewWorkflow:
                 return self.status(rid)
             if self._halted or len(self._records) >= 64:
                 return {"status": "DENIED", "error": "ReviewAdmissionStoppedOrFull"}
+            from .policy import require_install_write_path
+            try:
+                require_install_write_path(arguments["path"])
+            except (OSError, ValueError, TypeError):
+                return {"status": "REJECTED", "outcome": "NOT_STARTED",
+                        "error": "RunningInstallWriteDenied", "retry_allowed": False}
             path = self._policy.target(arguments["path"])
             before = self._store.snapshot(path)
             if type(before) is not SourceSnapshot:

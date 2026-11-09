@@ -18,6 +18,7 @@ from time import monotonic
 
 from .approval_v2_contract import operation_for_command
 from .commands import Command
+from .owner_dialog_integrity import DIALOG_INTEGRITY
 from .owner_approval_dialog_v2 import parse_review, verify_review_reply_data_only
 
 _DIALOG = Path(__file__).resolve().with_name("owner_approval_dialog_v2.py")
@@ -90,6 +91,7 @@ class LocalOwnerV2Pilot:
             latch = OwnerSessionEventLatch(self._guard._identity.session_id).start()
             self._guard.verify()
             latch.verify()
+            DIALOG_INTEGRITY.verify()
             job = WindowsJob()
             child = subprocess.Popen(
                 [sys.executable, "-I", "-X", "utf8", str(_DIALOG)],

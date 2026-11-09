@@ -686,7 +686,9 @@ class ProductBoundaryTests(GuardedTests):
             b"class Command:", b"class CandidateCommand:", 1)).hexdigest())
         _, result = asyncio.run(sdk.call_tool("request_source_patch", {**arguments,
             "expected_new_sha256": preview["new_sha256"], "request_id": RID}))
-        self.assertEqual(result["status"], "UNAVAILABLE")
+        # v0.1.3: the running install is refused before the product gate.
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["error"], "RunningInstallWriteDenied")
         self.assertEqual(path.read_bytes(), before)
 
     def test_inventory_and_transitive_product_imports_exclude_development_code(self):
