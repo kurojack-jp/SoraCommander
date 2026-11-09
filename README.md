@@ -4,9 +4,9 @@
 
 There is no separate app or terminal to talk to. You chat with ChatGPT as usual, and it can read your files, run commands, check the results and keep going, in the same conversation:
 
-> "Run the tests in my project folder and tell me what failed."
-> "Find where this error message comes from, and show me the lines around it."
-> "Start the build, and tell me when it finishes."
+- "Run the tests in my project folder and tell me what failed."
+- "Find where this error message comes from, and show me the lines around it."
+- "Start the build, and tell me when it finishes."
 
 To use your own project folders in these examples, first configure the allowed
 folders in [docs/INSTALL.md](docs/INSTALL.md). Without that file, only this checkout
@@ -77,9 +77,9 @@ There is no warranty. You are responsible for what you approve.
 
 別のアプリやターミナルで話す必要はありません。普段どおり ChatGPT とチャットするだけで、同じ会話の中でファイルを読み、コマンドを実行し、結果を確かめて、次の作業に進めます。
 
-> 「プロジェクトのフォルダでテストを流して、失敗したものを教えて」
-> 「このエラーメッセージがどこから出ているか探して、前後の行を見せて」
-> 「ビルドを始めて、終わったら教えて」
+- 「プロジェクトのフォルダでテストを流して、失敗したものを教えて」
+- 「このエラーメッセージがどこから出ているか探して、前後の行を見せて」
+- 「ビルドを始めて、終わったら教えて」
 
 自分のプロジェクトを扱う例は、[導入手順](docs/INSTALL.ja.md)で許可フォルダを
 設定した場合のものです。設定ファイルがなければ、このcheckoutだけを許可します。
