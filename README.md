@@ -26,6 +26,7 @@ Sora Commander is an MCP server for Windows. It connects to ChatGPT through Open
 
 - Runs commands and reports their output, exit codes and running jobs
 - Reads and searches files inside the folder you allow
+- Creates and edits supported text files inside allowed folders, after you check the proposed content and approve it in the local window
 - Opens a local approval window for commands and edits. There is no remote approval
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
@@ -90,6 +91,8 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 **他のツールの使用量を節約できます。** 読む、実行する、確かめるといった作業を、普段使っている ChatGPT のチャットが受け持つので、別のコーディング AI の使用量の上限を使わずに済みます。ChatGPT 自体のメッセージの上限はあります。
 
 OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サーバーです。安全と言い切れないコマンドは PC の画面に承認窓を出して、承認したときだけ実行します。**承認するときは PC の前にいる必要があります。** ファイルを読むことや結果の確認には、窓は出ません。
+
+許可フォルダの中の対応するテキストファイルを、承認窓で提案された内容を確認して承認した後に、ChatGPT が作成・編集できます。
 
 > **v0.1 開発者向けプレビューです。実用としての受入はしていません。**
 > 作者の通常環境に加え、2026-11-09に新しいWindowsサンドボックス（管理者権限のユーザー）で、ChatGPTからのファイル読取りとOwner承認付きコマンドの終了コード0まで試しました。PythonとGitはホストから読み取り専用で借りており、Pythonの導入は試していません。限定的な試行で、実用・本番の受入ではありません。AIにPCを操作させるソフトです。承認窓の内容を読んでから押してください。コマンドの意味を判断できる方だけ使ってください。

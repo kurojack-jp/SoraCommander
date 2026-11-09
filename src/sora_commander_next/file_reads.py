@@ -27,6 +27,7 @@ _READ_DENY_SECRET_SUFFIXES = (
     ".pem", ".key", ".pfx", ".p12", ".jks", ".keystore", ".kdbx",
 )
 _READ_DENY_SUFFIXES = _READ_DENY_SECRET_SUFFIXES + (
+    ".env",
     ".sqlite", ".sqlite3", ".db", ".db3", ".wal", ".shm", ".journal",
     ".zip", ".7z", ".rar", ".tar", ".tgz", ".gz", ".bak", ".backup",
 )

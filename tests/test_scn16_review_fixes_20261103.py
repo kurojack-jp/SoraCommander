@@ -26,7 +26,7 @@ SENSITIVE_DIRECTORIES = ("credentials.config", "secret.pem", "token.store",
 # are ordinary workspaces (review follow-up 2026-11-03). Below a root the full
 # file policy still applies.
 ORDINARY_DATA_SUFFIX_DIRECTORIES = ("project.db", "snapshot.bak", "dump.sqlite",
-                                    "release.zip", "old.backup")
+                                    "release.zip", "old.backup", "project.env")
 
 
 class SensitiveReadRootTests(unittest.TestCase):
@@ -85,13 +85,19 @@ class SensitiveReadRootTests(unittest.TestCase):
             folder = self.make("ordinary-root", name)
             with self.subTest(child=name), self.assertRaises(ReadBoundaryError):
                 reads.read_text_file(str(folder / "inner.txt"), (str(root),))
-        for name in ("cache.db", "notes.bak"):
+        for name in ("cache.db", "notes.bak", "prod.env", "PROD.ENV"):
             (root / name).write_text("synthetic only", encoding="utf-8")
             with self.subTest(file=name), self.assertRaises(ReadBoundaryError):
                 reads.read_text_file(str(root / name), (str(root),))
+        for name in ("environment.txt", "env.py"):
+            (root / name).write_text("synthetic only", encoding="utf-8")
+            with self.subTest(ordinary_file=name):
+                self.assertEqual(reads.read_text_file(str(root / name), (str(root),))["content"],
+                                 "synthetic only")
         listed = {row["name"] for row in reads.list_folder(str(root), (str(root),))["entries"]}
         self.assertTrue(listed.isdisjoint({*ORDINARY_DATA_SUFFIX_DIRECTORIES,
-                                           "cache.db", "notes.bak"}))
+                                           "cache.db", "notes.bak", "prod.env", "PROD.ENV"}))
+        self.assertTrue({"environment.txt", "env.py"}.issubset(listed))
 
     def test_data_suffix_file_as_root_is_still_denied(self):
         target = self.base / "cache.db"
