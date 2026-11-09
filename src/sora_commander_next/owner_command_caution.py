@@ -51,7 +51,20 @@ def _pairs_no_duplicate(pairs):
     return obj
 
 
-def load_caution_catalog(locale):
+def load_caution_catalog(locale="en"):
+    """Require verified English; absent Japanese alone permits fallback."""
+    if type(locale) is not str or locale not in _CATALOG:
+        raise ValueError("unsupported caution locale")
+    english = _load_caution_catalog_exact("en")
+    if locale == "en":
+        return english
+    try:
+        return _load_caution_catalog_exact("ja")
+    except FileNotFoundError:
+        return english
+
+
+def _load_caution_catalog_exact(locale):
     """Only two fixed, SHA-pinned files. No external JSON is selectable."""
     if type(locale) is not str or locale not in _CATALOG:
         raise ValueError("unsupported caution locale")
@@ -60,7 +73,8 @@ def load_caution_catalog(locale):
     file = folder / name
     if folder.is_symlink() or file.is_symlink():
         raise ValueError("linked caution dictionary")
-    data = file.read_bytes()
+    with file.open("rb") as source:
+        data = source.read(4097)
     if len(data) > 4096 or sha256(data).hexdigest() != expected:
         raise ValueError("caution dictionary integrity mismatch")
     try:
@@ -92,7 +106,7 @@ class CommandCaution:
                 *self.reasons, self.disclaimer)
 
 
-def command_caution(*, executable, argv, locale="ja"):
+def command_caution(*, executable, argv, locale="en"):
     """Classify only observable launch-text clues; NEVER report SAFE/LOW.
 
     The result cannot determine which program is actually on disk, resolve

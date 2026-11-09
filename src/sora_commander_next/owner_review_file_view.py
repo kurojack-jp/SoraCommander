@@ -8,8 +8,11 @@ from dataclasses import dataclass
 import re
 from .file_edits import escape_review_display
 
-_CAUTION = "Inspect the ENTIRE proposal. Close or timeout = DENIED."
-_INFORMATION = "TIME LIMIT / Close or timeout declines this local file operation."
+_CAUTION = ("Inspect the ENTIRE proposal. Close or Reject intentionally declines. "
+            "Unanswered expiry is not an Owner rejection.")
+_INFORMATION = ("Neither Close/Reject nor unanswered expiry authorizes file changes. "
+                "Candidate wording only: current Host/MCP file results do not yet "
+                "distinguish expiry from rejection.")
 
 
 def _nonempty_text(value, label):

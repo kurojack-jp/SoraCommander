@@ -168,6 +168,7 @@ MODULES = tuple(sorted((
     "mcp_adapter.py",
     "owner_approval_broker.py",
     "owner_dialog_integrity.py",
+    "owner_ui_language.py",
     "owner_approval_dialog.py",
     "owner_ui.py",
     "owner_review_dispatch.py",

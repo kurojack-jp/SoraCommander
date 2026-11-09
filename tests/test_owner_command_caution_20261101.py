@@ -1,5 +1,6 @@
 """Command visual caution is advisory only: fake input, no command/GUI/Owner."""
 import ast
+import io
 from pathlib import Path
 import sys
 import unittest
@@ -105,7 +106,7 @@ class CommandCautionTests(unittest.TestCase):
     def test_dictionary_integrity_or_link_failure_is_not_ignored(self):
         for locale in ("en", "ja"):
             with self.subTest(locale=locale):
-                with patch.object(Path, "read_bytes", return_value=b"{}"):
+                with patch.object(Path, "open", side_effect=lambda *a, **k: io.BytesIO(b"{}")):
                     with self.assertRaisesRegex(ValueError, "integrity"):
                         load_caution_catalog(locale)
                 with patch.object(Path, "is_symlink", return_value=True):

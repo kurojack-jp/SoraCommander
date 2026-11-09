@@ -87,6 +87,74 @@ class OwnerV2LocalTests(unittest.TestCase):
             make_review_frame(sample(), owner_sid="owner",
                               machine_id="machine", seconds=0)
 
+    def _mock_review(self, decision="EXPIRED", failure=None):
+        pilot = object.__new__(LocalOwnerV2Pilot)
+        pilot._guard = Mock(sid="synthetic-owner")
+        child = Mock(pid=123, returncode=0, stdin=None, stdout=None)
+        child.poll.return_value = 0
+        def reply(*, input, timeout):
+            frame = parse_review(input)
+            data = {key: frame[key] for key in ("nonce", "review_id", "spec_sha256")}
+            data["decision"] = decision
+            if failure in ("nonce", "review_id", "spec_sha256"):
+                data[failure] = "wrong"
+            if failure == "process":
+                child.returncode = 1
+            if failure == "transport":
+                raise OSError("synthetic pipe disconnect")
+            raw = json.dumps(data).encode("ascii") + b"\n"
+            return (b"bad\n" if failure == "malformed" else raw), None
+        child.communicate.side_effect = reply
+        with patch("sora_commander_next.windows_job.WindowsJob") as job, \
+             patch("sora_commander_next.windows_session_events.OwnerSessionEventLatch") as latch, \
+             patch("sora_commander_next.approval_v2_owner_local.subprocess.Popen", return_value=child) as launch:
+            if failure == "WTS":
+                latch.return_value.start.return_value.verify.side_effect = PermissionError("synthetic WTS")
+            if failure == "identity":
+                pilot._guard.verify.side_effect = PermissionError("synthetic identity")
+            result = pilot.review_once_local(sample(), allow_trusted=True)
+            if failure in ("WTS", "identity"):
+                launch.assert_not_called()
+            else:
+                launch.assert_called_once()
+                self.assertEqual(launch.call_args.args[0][-1], str(Path(__file__).resolve().parents[1] / "src" / "sora_commander_next" / "owner_approval_dialog_v2.py"))
+                self.assertIs(launch.call_args.kwargs["shell"], False)
+                job.return_value.attach_and_resume.assert_called_once_with(child)
+        return result
+
+    def test_mock_expiry_and_rejection_are_distinct_inert_data(self):
+        for decision, status, choice in (
+                ("EXPIRED", "EXPIRED_DATA_ONLY", None),
+                ("DENY", "DENIED_DATA_ONLY", None),
+                ("ONCE", "LOCAL_CHOICE_DATA_ONLY", "ONCE"),
+                ("TRUSTED", "LOCAL_CHOICE_DATA_ONLY", "TRUSTED")):
+            with self.subTest(decision=decision):
+                result = self._mock_review(decision)
+                self.assertEqual(result.status, status)
+                self.assertEqual(result.choice, choice)
+                self.assertIsNotNone(result.review_id)
+                self.assertEqual(len(result.review_sha256), 64)
+                self.assertNotIn(result.status, ("TIMED_OUT", "NOT_STARTED"))
+
+    def test_mock_invalid_expiry_and_ui_failures_remain_error(self):
+        for failure in ("nonce", "review_id", "spec_sha256", "process", "transport", "malformed", "WTS", "identity"):
+            with self.subTest(failure=failure):
+                result = self._mock_review(failure=failure)
+                self.assertEqual(result.status, "ERROR")
+                self.assertIsNone(result.choice)
+                self.assertIsNone(result.review_id)
+
+    def test_real_windows_child_pipe_synthetic_expired_no_grant(self):
+        fixture = Path(__file__).parent / "fixtures" / "v2_dialog_synthetic_reply.py"
+        with patch("sora_commander_next.approval_v2_owner_local._DIALOG", fixture), patch.dict(
+                "os.environ", {"SORA_V2_TEST_CHOICE": "EXPIRED"}):
+            result = LocalOwnerV2Pilot().review_once_local(sample(), allow_trusted=True)
+        self.assertEqual(result.status, "EXPIRED_DATA_ONLY")
+        self.assertIsNone(result.choice)
+        self.assertIsNotNone(result.review_id)
+        self.assertEqual(len(result.review_sha256), 64)
+        self.assertEqual(len(result.spec_sha256), 64)
+
     def test_real_windows_child_pipe_synthetic_once_data_only(self):
         """Real WTS/Win32 child + anonymous pipe, synthetic output, NO click."""
         fixture = Path(__file__).parent / "fixtures" / "v2_dialog_synthetic_reply.py"

@@ -112,6 +112,18 @@ The `read:` setting cannot prevent those command writes; inspect each approval.
 approve.** If an approval window shows a path inside a read-only folder, read it
 carefully before you approve.
 
+### Choose the window language (optional)
+
+Approval windows are shown in English or Japanese. By default they follow the
+Windows display language: Japanese Windows shows Japanese, any other language
+shows English. To choose yourself, create
+`%USERPROFILE%\.config\sora-commander\language.txt` with one line, `en` or `ja`
+(lowercase; lines starting with `#` are ignored). Any other content stops
+startup with a `[HOLD]` message. The language is read at startup; restart the
+Broker and its client after changing it. The Broker reports
+`[INFO] Window language: ...` when it starts. The language changes only the
+window text, never what is checked or approved.
+
 ## 5. Start it
 
 Choose one mode. **Never run both at once.**

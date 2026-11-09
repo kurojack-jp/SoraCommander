@@ -157,6 +157,13 @@ def main():
         import sys
         print(f"[HOLD] {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
+    from .owner_ui_language import OwnerLanguageError, owner_ui_language
+    try:
+        owner_ui_language()
+    except OwnerLanguageError as error:
+        import sys
+        print(f"[HOLD] {error}", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
     jobs = None
     journal_enabled = os.environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"
     result_enabled = os.environ.get("SORA_NEXT_RESULT_ARCHIVE_PILOT") == "1"

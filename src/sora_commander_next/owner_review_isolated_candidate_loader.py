@@ -18,6 +18,7 @@ _FIXED_FILES = frozenset({
     "owner_approval_dialog.py", "owner_approval_dialog_v2.py",
     "owner_review_presentation_candidate.py", "owner_review_i18n.py",
     "owner_command_caution.py", "owner_review_renderer.py",
+    "owner_review_locale_settings_candidate.py",
 })
 _FIXED_RESOURCES = frozenset({
     "en.json", "ja.json", "caution_en.json", "caution_ja.json",
@@ -39,7 +40,9 @@ def _verify_fixed_origin(folder):
         raise ValueError("missing or linked Owner UI translations")
     for filename in _FIXED_RESOURCES:
         item = resource_dir / filename
-        if item.is_symlink() or not item.is_file():
+        if item.is_symlink() or item.is_junction():
+            raise ValueError("linked Owner UI translation")
+        if not item.is_file() and filename not in ("ja.json", "caution_ja.json"):
             raise ValueError("missing or linked Owner UI translation")
 
 
@@ -101,3 +104,14 @@ def load_bound_review_candidate():
                 if name == _PACKAGE_NAME or name.startswith(_PACKAGE_NAME + "."):
                     del sys.modules[name]
             raise
+
+
+def load_locale_settings_candidate():
+    """Fixed sibling DEV adapter; no path or locale comes from a request."""
+    load_bound_review_candidate()
+    with _LOCK:
+        folder = Path(__file__).absolute().parent
+        _verify_fixed_origin(folder)
+        _verify_package_cache(folder, folder / "__init__.py")
+        from importlib import import_module
+        return import_module(_PACKAGE_NAME + ".owner_review_locale_settings_candidate")

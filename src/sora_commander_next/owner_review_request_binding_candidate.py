@@ -48,7 +48,7 @@ def _no_duplicate_json_fields(pairs):
     return result
 
 
-def bind_command_frame(frame, *, locale):
+def bind_command_frame(frame, *, locale="en"):
     """Data-only binding from exactly one active command transport frame."""
     # A duplicate-key frame can be interpreted differently by other consumers.
     # Reject it here; the active command parser/Host remains unchanged.
@@ -66,7 +66,7 @@ def bind_command_frame(frame, *, locale):
         review_identity=request["pending_id"], presentation=view)
 
 
-def bind_v2_frame(frame, *, locale):
+def bind_v2_frame(frame, *, locale="en"):
     """Data-only binding from exactly one inactive v2 candidate frame."""
     request = parse_review(frame)
     # v2 review_text is the SAME canonical formatter the candidate child uses.

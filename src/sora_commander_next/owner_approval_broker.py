@@ -19,8 +19,8 @@ from .windows_session_events import OwnerSessionEventLatch
 from .owner_dialog_integrity import DIALOG_INTEGRITY
 
 DIALOG_SCRIPT=Path(__file__).resolve().with_name("owner_command_dialog_localized.py")
-# Fixed by Owner decision until a reviewed language setting exists. Display only.
-OWNER_UI_LOCALE="ja"
+# Display only: language.txt, else the Windows display language (en/ja).
+from .owner_ui_language import owner_ui_language
 
 
 class OwnerApprovalBroker:
@@ -57,7 +57,7 @@ class OwnerApprovalBroker:
                 "argv":list(req.argv), "cwd":req.cwd,
                 "seconds":budget,"pending_id":pending_id,
                 "timeout":req.timeout,"output_limit":req.output_limit,
-                "locale":OWNER_UI_LOCALE,
+                "locale":owner_ui_language(),
             },ensure_ascii=True,separators=(",",":")).encode("ascii")+b"\n"
             if len(payload)>131072:
                 raise PermissionError("review too large for safe UI display")

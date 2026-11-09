@@ -3,6 +3,7 @@
 The APPROVE/DENY child fixtures are SYNTHETIC, not a human-click acceptance.
 Actual Tk dialogs are never opened by the automated test suite.
 """
+import builtins
 import os
 from pathlib import Path
 import sys
@@ -98,11 +99,20 @@ class Phase9BIPCTests(unittest.TestCase):
         p.assert_not_called()
 
     def test_dialog_parse_refuses_bad_commands_without_tk_import(self):
+        absent=object()
+        before=sys.modules.get("tkinter",absent)
+        original_import=builtins.__import__
+        def refuse_tk_import(name,*args,**kwargs):
+            if name=="tkinter" or name.startswith("tkinter."):
+                raise AssertionError("invalid request must not import tkinter")
+            return original_import(name,*args,**kwargs)
         for bad in (b"",b"{}\n",b"not-json\n",b"{}",
                     b" "*(131073)+b"\n"):
-            with self.subTest(length=len(bad)),self.assertRaises(ValueError):
-                parse_request(bad)
-        self.assertNotIn("tkinter",sys.modules)
+            with self.subTest(length=len(bad)):
+                with patch("builtins.__import__",side_effect=refuse_tk_import):
+                    with self.assertRaises(ValueError):
+                        parse_request(bad)
+                self.assertIs(sys.modules.get("tkinter",absent),before)
 
     def test_no_automatic_dialog_and_no_remote_approval_registration(self):
         self.assertFalse(hasattr(self.host,"approve_local"))

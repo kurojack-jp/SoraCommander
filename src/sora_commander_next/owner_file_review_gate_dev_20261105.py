@@ -21,13 +21,14 @@ from .owner_dialog_integrity import DIALOG_INTEGRITY
 DEV_ONLY = True
 NOT_REGISTERED = True
 DIALOG_SCRIPT = Path(__file__).resolve().with_name("owner_file_dialog_localized.py")
-OWNER_UI_LOCALE = "ja"  # Owner decision F4; the same fixed value as the command window
+from .owner_ui_language import owner_ui_language  # same choice as the command window
 MAX_REQUEST = 1048576  # also fixed in the child
 MAX_SECONDS = 45.0
 
 
-def request_frame(nonce, proposal, seconds, locale=OWNER_UI_LOCALE):
+def request_frame(nonce, proposal, seconds, locale=None):
     """The one line sent to the child. Too large or malformed raises, and no window opens."""
+    locale = owner_ui_language() if locale is None else locale
     bound = bound_proposal(proposal, review_id=secrets.token_hex(8), seconds=seconds, locale=locale)
     presentation = bound.presentation
     screen = presentation.screen
@@ -41,7 +42,7 @@ def request_frame(nonce, proposal, seconds, locale=OWNER_UI_LOCALE):
     return frame
 
 
-def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=OWNER_UI_LOCALE):
+def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=None):
     child = job = latch = None
     expired = False
     try:

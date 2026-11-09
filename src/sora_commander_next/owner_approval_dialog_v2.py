@@ -80,7 +80,7 @@ def verify_review_reply_data_only(request, raw):
             or response["nonce"] != request.get("nonce")
             or response["review_id"] != request.get("review_id")
             or response["spec_sha256"] != request.get("spec_sha256")
-            or response["decision"] not in {"ONCE", "TRUSTED", "DENY"}):
+            or response["decision"] not in {"ONCE", "TRUSTED", "DENY", "EXPIRED"}):
         raise ValueError("Owner review reply does not match displayed request")
     if response["decision"] == "TRUSTED" and request.get("allow_trusted") is not True:
         raise ValueError("TRUSTED was not offered to Owner")
@@ -106,7 +106,9 @@ def review_text(request):
             "It does NOT inspect scripts, dependencies, child commands or program effects.\n"
             "A TRUSTED approval permits the SAME launch command again even after\n"
             "a script or dependency is edited, until you explicitly revoke it.\n"
-            "Closing this window or expiration rejects the current request.\n")
+            "Close or Reject declines the current request.\n"
+            "Unanswered expiry is EXPIRED, not an Owner rejection.\n"
+            "Neither grants consent or authorizes execution.\n")
 
 
 def main():
@@ -119,20 +121,23 @@ def main():
         "_sora_owner_v2_visual_theme", Path(__file__).resolve().with_name("approval_visual_theme.py"))
     theme = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(theme)
-    selected = {"decision": "DENY"}
+    selected = {"decision": None}
     root = tk.Tk()
     def decide(value):
+        # Tk callbacks run serially; the first event owns the decision.
+        if selected["decision"] is not None:
+            return
         selected["decision"] = value
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", lambda: decide("DENY"))
-    root.after(round(request["seconds"] * 1000), lambda: (
-        decide("DENY") if root.winfo_exists() else None))
+    root.after(round(request["seconds"] * 1000), lambda: decide("EXPIRED"))
     theme.shared_review(
         tk, root, kind="v2_candidate",
         title="Sora Commander Next — Owner approval v2 (LOCAL CANDIDATE)",
         heading="Owner approval v2 — LOCAL CANDIDATE (not active)",
-        caution="Inspect every command argument. Close or expiry = DENY.",
+        caution=("Inspect every command argument. Close or Reject = DENY. "
+                 "Unanswered expiry = EXPIRED, not Owner rejection; neither grants consent."),
         information=("TRUSTED approval can reuse a launch even after scripts change; "
                      "this candidate is NOT an active or authenticated approval path."),
         body=review_text(request), trusted_offered=request["allow_trusted"],
@@ -151,6 +156,8 @@ def main():
                 pass
     root.after(100, alert_review)
     root.mainloop()
+    if selected["decision"] is None:
+        raise RuntimeError("Owner review ended without a decision or timer expiry")
     response = {
         "nonce": request["nonce"], "review_id": request["review_id"],
         "spec_sha256": request["spec_sha256"],

@@ -115,6 +115,13 @@ def main(argv=None):
             return run_ledger_command(ledger, arguments.resolve_unknown)
         finally:
             ledger.close()
+    from .owner_ui_language import (OwnerLanguageError, owner_ui_language,
+                                    owner_ui_language_source)
+    try:
+        language = owner_ui_language()
+    except OwnerLanguageError as error:
+        print(f"[HOLD] {error}", flush=True)
+        return 2
     try:
         host = build_backend_host(guard, repo_root, os.environ)
     except AllowedRootsError as error:
@@ -142,6 +149,9 @@ def main(argv=None):
           flush=True)
     print(f"[INFO] Allowed folders: {len(host.policy.roots)} full, "
           f"{len(host.policy.read_only_roots)} read-only for file tools", flush=True)
+    print(f"[INFO] Window language: {language} ("
+          f"{'language.txt' if owner_ui_language_source() == 'file' else 'Windows setting'})",
+          flush=True)
     try:
         for _ in sys.stdin:
             pass  # Only end of input or Ctrl+C stops the Broker.

@@ -137,13 +137,14 @@ class LocalOwnerV2Pilot:
             choice = verify_review_reply_data_only(frame, result["reply"])
             latch.verify()
             self._guard.verify()
-            # A verified rejection has a review identity too. Persisting its
-            # digest as an inert denial receipt prevents the same challenge
-            # from being reused as an alleged later approval.
+            # Preserve the bound review identity for either non-grant outcome.
+            # These inert data do not prove live dispatch admission or
+            # authorize a retry, grant, or production timeout classification.
             return LocalReviewData(
-                status=("DENIED_DATA_ONLY" if choice == "DENY"
-                        else "LOCAL_CHOICE_DATA_ONLY"),
-                choice=None if choice == "DENY" else choice,
+                status=({"DENY": "DENIED_DATA_ONLY",
+                         "EXPIRED": "EXPIRED_DATA_ONLY"}.get(
+                             choice, "LOCAL_CHOICE_DATA_ONLY")),
+                choice=None if choice in {"DENY", "EXPIRED"} else choice,
                 owner_sid=self._guard.sid, spec_sha256=operation.digest,
                 review_sha256=sha256(raw).hexdigest(),
                 review_id=frame["review_id"], request_id=request.request_id)
