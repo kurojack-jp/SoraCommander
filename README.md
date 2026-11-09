@@ -69,6 +69,8 @@ The Sora Commander name and character artwork are not covered. See [NOTICE.md](N
 
 There is no warranty. You are responsible for what you approve.
 
+Sora Commander is an independent project. It is not made, endorsed or supported by OpenAI. ChatGPT and Sora are products of OpenAI.
+
 ---
 
 ## 日本語
@@ -109,3 +111,5 @@ Brokerのパイプが用意できるまで待ってからトンネルを起動�
 **ライセンス：** コードは [GNU AGPL v3.0](LICENSE) です。無料で使えて、変更もできます。配布するときや、変更版をネットワーク越しに提供するときは、同じライセンスでソースを公開する必要があります。Sora Commander の名前とキャラクター画像は対象外です。詳しくは [NOTICE.md](NOTICE.md) を見てください。
 
 保証はありません。承認した操作の責任は、利用者にあります。
+
+Sora Commander は個人の独立したプロジェクトで、OpenAI の製品ではありません。OpenAI が作ったり、推奨したり、サポートしたりしているものでもありません。ChatGPT と Sora は OpenAI の製品です。
