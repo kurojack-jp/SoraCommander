@@ -62,6 +62,13 @@ C:\Work\ProjectTwo
 read: C:\Work\ReferenceNotes
 ```
 
+**Choose these folders carefully.** In every allowed folder, including
+`read:` folders, the file tools read files without an approval window and
+send their content to ChatGPT. Files are refused only by name (such as `.env`
+or `credentials`), so passwords or connection strings inside files like
+`appsettings.json`, `web.config` or `config.yaml` can be read. Do not allow
+folders that hold such files.
+
 An unprefixed entry grants file reads, creation, editing, moves, and command
 working directories. An entry starting with the exact lowercase `read:` limits
 **ChatGPT's file tools** to reads, searches, and listings there. Whitespace after `read:` is ignored;
