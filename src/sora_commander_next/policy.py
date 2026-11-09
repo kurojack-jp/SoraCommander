@@ -56,15 +56,33 @@ class Grant:
 
 
 class Policy:
-    def __init__(self, roots=(), auto=(), clock=monotonic):
+    def __init__(self, roots=(), auto=(), clock=monotonic, *, read_only_roots=()):
         self.lock = RLock()
         self.instance_id = uuid4().hex
         self.roots = tuple(absolute(root) for root in roots)
-        if any(Path(root).parent == Path(root) for root in self.roots):
+        self.read_only_roots = tuple(absolute(root) for root in read_only_roots)
+        if any(Path(root).parent == Path(root) for root in self.read_roots):
             raise ValueError("whole-disk roots are forbidden")
+        if any(within(read, full) or within(full, read)
+               for read in self.read_only_roots for full in self.roots):
+            raise ValueError("full and read-only roots must not overlap")
         self.auto, self.clock, self.generation = tuple(auto), clock, 0
         self._grants: dict[str, Grant] = {}
         self._grant_guards = {}  # optional Owner-session checks, local only
+
+    @property
+    def read_roots(self):
+        return self.roots + self.read_only_roots
+
+    def require_full_path(self, path):
+        """Narrow legacy pilots/forwarders too; this is no write authorization."""
+        if (type(path) is not str or not path or "\0" in path
+                or not Path(path).is_absolute()
+                or not any(within(path, root) for root in self.roots)):
+            raise PermissionError("full-access folder required")
+        resolved = absolute(path)
+        if not any(within(resolved, root) for root in self.roots):
+            raise PermissionError("full-access folder required")
 
     @locked
     def add_grant_local(self, grant: Grant):

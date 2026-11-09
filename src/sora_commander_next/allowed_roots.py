@@ -1,5 +1,6 @@
 """Startup-only local Owner scope. No tool, wire operation, or reload API."""
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import stat
 
@@ -7,6 +8,16 @@ from .file_reads import _read_name_denied
 
 MAX_ROOTS = 16
 MAX_CONFIG_BYTES = 65536
+
+
+@dataclass(frozen=True)
+class AllowedRoots:
+    full: tuple[str, ...]
+    read_only: tuple[str, ...] = ()
+
+    @property
+    def read(self):
+        return self.full + self.read_only
 
 
 class AllowedRootsError(ValueError):
@@ -94,6 +105,30 @@ def _validate_root(value, line, home, blocked, contained):
         raise AllowedRootsError(line, reason) from None
 
 
+def _parse_roots(text, home, blocked, contained):
+    full, read_only = [], []
+    for line, value in enumerate(text.splitlines(), 1):
+        value = value.strip()
+        if not value or value.startswith("#"):
+            continue
+        if len(full) + len(read_only) == MAX_ROOTS:
+            raise AllowedRootsError(line, "more than 16 folders")
+        reading = value.startswith("read:")
+        if reading:
+            value = value[len("read:"):].lstrip()
+        root = _validate_root(value, line, home, blocked, contained)
+        # Compare canonical paths, case-insensitively on Windows. A full root
+        # must never grant writes inside a root declared read-only (or vice versa).
+        others = full if reading else read_only
+        if any(_within(Path(root), Path(other)) or _within(Path(other), Path(root))
+               for other in others):
+            raise AllowedRootsError(line, "full and read-only folders overlap")
+        (read_only if reading else full).append(root)
+    if not full and not read_only:
+        raise AllowedRootsError(0, "no folders configured")
+    return AllowedRoots(tuple(full), tuple(read_only))
+
+
 def startup_allowed_roots(repo_root, profile, environ=None):
     """Read once per Host composition; return an immutable validated snapshot.
 
@@ -108,7 +143,7 @@ def startup_allowed_roots(repo_root, profile, environ=None):
         root = base / "tests"
         if not root.is_dir():
             raise AllowedRootsError(0, "test root missing")
-        return (str(root),)
+        return AllowedRoots((str(root),))
     environ = os.environ if environ is None else environ
     try:
         home, config, blocked, contained = _locations(environ)
@@ -125,7 +160,7 @@ def startup_allowed_roots(repo_root, profile, environ=None):
                     break
                 if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
                     raise AllowedRootsError(0, "linked configuration path")
-            return (_validate_root(str(base), 0, home, blocked, contained),)
+            return AllowedRoots((_validate_root(str(base), 0, home, blocked, contained),))
         _plain_path(config, directory=False)
         with config.open("rb") as stream:
             data = stream.read(MAX_CONFIG_BYTES + 1)
@@ -136,17 +171,7 @@ def startup_allowed_roots(repo_root, profile, environ=None):
         except UnicodeDecodeError as error:
             line = data[:error.start].count(b"\n") + 1
             raise AllowedRootsError(line, "invalid UTF-8") from None
-        roots = []
-        for line, value in enumerate(text.splitlines(), 1):
-            value = value.strip()
-            if not value or value.startswith("#"):
-                continue
-            if len(roots) == MAX_ROOTS:
-                raise AllowedRootsError(line, "more than 16 folders")
-            roots.append(_validate_root(value, line, home, blocked, contained))
-        if not roots:
-            raise AllowedRootsError(0, "no folders configured")
-        return tuple(roots)
+        return _parse_roots(text, home, blocked, contained)
     except AllowedRootsError:
         raise
     except (OSError, ValueError, KeyError, RuntimeError):

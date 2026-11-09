@@ -30,7 +30,8 @@ class LocalReadonlyE2E(unittest.TestCase):
         self.modified = self.root / "beta.py"
         self.original.write_bytes(b"first = 1\nHELLO_SYMBOL = 'old'\n")
         self.modified.write_bytes(b"first = 2\nHELLO_SYMBOL = 'new'\n")
-        self.host = SimpleNamespace(policy=SimpleNamespace(roots=(str(self.root),)))
+        roots = (str(self.root),)
+        self.host = SimpleNamespace(policy=SimpleNamespace(roots=roots, read_roots=roots))
         self.server = build_server(self.host)
 
     def call(self, name, arguments):
@@ -103,7 +104,7 @@ class LocalReadonlyE2E(unittest.TestCase):
         self.assertIn("alpha.py", str(result))
 
     def test_no_roots_denies_every_read(self):
-        server = build_server(SimpleNamespace(policy=SimpleNamespace(roots=())))
+        server = build_server(SimpleNamespace(policy=SimpleNamespace(roots=(), read_roots=())))
         cases = [
             ("read_many_text_files", {"paths": [str(self.original)]}),
             ("find_files", {"path": str(self.root), "name": "alpha"}),

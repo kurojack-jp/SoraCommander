@@ -145,6 +145,7 @@ class UnifiedOperationWaitTests(unittest.TestCase):
         from uuid import uuid4
         from sora_commander_next import file_edits
         scope = ROOT / "tests"
+        self.host.policy = Policy(roots=(str(scope),))
         target = scope / (
             "owner-edit-pilot-auto-atomic-integration-" + uuid4().hex + ".txt")
         initial = b"Owner auto-wait CAS test BEFORE\\n"
@@ -300,6 +301,7 @@ class UnifiedOperationWaitTests(unittest.TestCase):
         from sora_commander_next.file_edits import (
             _CREATE_ROOT, create_text_exclusive)
         self.assertEqual(_CREATE_ROOT, ROOT / "tests" / "real_mcp")
+        self.host.policy = Policy(roots=(str(_CREATE_ROOT),))
         target = _CREATE_ROOT / (
             "owner-edit-pilot-auto-create-integration-" + uuid4().hex + ".txt")
         proposed = "Sora auto-wait exclusive create test\\n"

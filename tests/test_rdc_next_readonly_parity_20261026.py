@@ -29,7 +29,7 @@ CASES = {
 
 class ReadonlyParityTests(unittest.TestCase):
     def server(self, roots=("MOCK_CONFIGURED_ROOT",), pilot=False):
-        host = SimpleNamespace(policy=SimpleNamespace(roots=roots))
+        host = SimpleNamespace(policy=SimpleNamespace(roots=roots, read_roots=roots))
         if pilot:
             host._edit_review_pilot = SimpleNamespace(enable_create=True)
         return adapter.build_server(host), host

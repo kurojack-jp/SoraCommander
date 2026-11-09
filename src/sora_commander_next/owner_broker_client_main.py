@@ -17,7 +17,8 @@ def build_client_host(guard, repo_root, environ, *, pipe_name=None):
     roots = startup_allowed_roots(
         repo_root, environ.get("SORA_NEXT_OWNER_PROFILE", "tests"), environ)
     name = pipe_name or broker_pipe_name(guard.sid, guard._identity.session_id)
-    return DevBrokerHost(OwnerBrokerPipeClient(pipe_name=name), read_roots=roots,
+    return DevBrokerHost(OwnerBrokerPipeClient(pipe_name=name), read_roots=roots.full,
+                         read_only_roots=roots.read_only,
                          edit_pilot=environ.get("SORA_NEXT_EDIT_PILOT") == "1",
                          create_pilot=environ.get("SORA_NEXT_CREATE_PILOT") == "1")
 

@@ -78,7 +78,8 @@ def build_backend_host(guard, repo_root, environ):
         jobs = DurableJobManager(ledger=LaunchLedger(journal.with_name(LEDGER_NAME)),
                                  journal_path=journal, output_archive_path=archive,
                                  protected_stage=True)
-    host = Host(policy=Policy(roots=roots), owner=guard.sid, jobs=jobs)
+    host = Host(policy=Policy(roots=roots.full, read_only_roots=roots.read_only),
+                owner=guard.sid, jobs=jobs)
     host.attach_owner_review_local(OwnerReviewDispatcher(WindowsOwnerController(host)))
     if environ.get("SORA_NEXT_EDIT_PILOT") == "1":
         host._edit_review_pilot = EditReviewPilot(
@@ -139,7 +140,8 @@ def main(argv=None):
         return 3
     print("[READY] Owner Broker is running. DEV only. Press Ctrl+C here to stop it.",
           flush=True)
-    print(f"[INFO] Allowed folders: {len(host.policy.roots)}", flush=True)
+    print(f"[INFO] Allowed folders: {len(host.policy.roots)} full, "
+          f"{len(host.policy.read_only_roots)} read-only for file tools", flush=True)
     try:
         for _ in sys.stdin:
             pass  # Only end of input or Ctrl+C stops the Broker.

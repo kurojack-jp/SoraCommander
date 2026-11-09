@@ -97,8 +97,9 @@ class OwnerBrokerPipeProcessTests(unittest.TestCase):
 
     def test_large_request_arrives_for_a_dev_client(self):
         from sora_commander_next.owner_broker_dev import DevBrokerHost
-        client = DevBrokerHost(self.client)
-        result = client.dev_mutate("create_file", path=r"D:\x\a.txt", content="あ" * 21000)
+        client = DevBrokerHost(self.client, read_roots=(str(ROOT),))
+        result = client.dev_mutate("create_file", path=str(ROOT / "tests" / "broker-large.txt"),
+                                   content="あ" * 21000)
         self.assertEqual(result["status"], "OK")
 
     def test_slow_call_does_not_block_another_call(self):

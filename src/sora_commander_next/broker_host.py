@@ -59,9 +59,10 @@ class BrokerHost:
     """
     _max_request_bytes = MAX_WIRE_BYTES
 
-    def __init__(self, transport, *, read_roots=()):
+    def __init__(self, transport, *, read_roots=(), read_only_roots=()):
         self._transport = transport
-        self.policy = Policy(roots=read_roots)
+        # Historical read_roots argument denotes the original full scope.
+        self.policy = Policy(roots=read_roots, read_only_roots=read_only_roots)
         self._closed = False
 
     def ping(self):

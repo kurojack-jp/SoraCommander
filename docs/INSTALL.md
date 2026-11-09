@@ -59,15 +59,25 @@ folder path per line, without quotes or environment-variable substitution:
 # Folders I allow
 C:\Work\ProjectOne
 C:\Work\ProjectTwo
+read: C:\Work\ReferenceNotes
 ```
+
+An unprefixed entry grants file reads, creation, editing, moves, and command
+working directories. An entry starting with the exact lowercase `read:` limits
+**ChatGPT's file tools** to reads, searches, and listings there. Whitespace after `read:` is ignored;
+other prefixes, including `READ:`, are invalid. A read-only folder cannot be a
+file-write target or a command working directory. Full and read-only entries
+must not name the same folder or contain one another, in either order.
 
 Blank lines and lines starting with `#` are ignored. The file replaces the
 default list; include the checkout explicitly if you also want it allowed.
-Without the file, only the checkout is allowed. Up to 16 folder entries are
+Without the file, only the checkout has full access. Up to 16 folder entries in
+total across both modes are
 accepted. An existing empty/comment-only file or any invalid line refuses
 startup; no invalid entry is silently skipped. Errors show only a line number
 and a reason (line 0 means a file-level error). Broker startup reports only the
-number of folders.
+number of folders in each mode: `[INFO] Allowed folders: N full, M read-only for file tools`.
+The same validation and rejected-folder rules below apply to both modes.
 
 The list is read once when each process starts. Restart **both the Broker and
 its client/tunnel** after editing it. No MCP tool or Broker message can read,
@@ -86,7 +96,14 @@ Rejected folders include:
 
 Configuration files reached through links or with invalid UTF-8 are refused too.
 The file is limited to 64 KiB. This list scopes file tools and command working
-directories; it does not sandbox a command you explicitly approve.
+directories; it does not sandbox a command you explicitly approve. Even for a
+read-only folder, an approved command runs with the Owner's Windows rights and
+can write there by using an absolute path or changing its own working directory.
+The `read:` setting cannot prevent those command writes; inspect each approval.
+
+**`read:` protects a folder from ChatGPT's file tools only, not from commands you
+approve.** If an approval window shows a path inside a read-only folder, read it
+carefully before you approve.
 
 ## 5. Start it
 

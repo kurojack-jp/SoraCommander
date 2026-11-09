@@ -5,7 +5,7 @@ No pipe, Owner window, job or real file write. Writers are mocked in the backend
 import asyncio
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sora_commander_next.broker_host import BrokerHost, UnavailableTransport
 from sora_commander_next.edit_review_pilot import EditReviewPilot
@@ -81,6 +81,34 @@ class FakePilot:
         return {"status": "COMMITTED", "pending_id": pending_id}
 
 
+class ClientScopeTests(unittest.TestCase):
+    def test_outside_full_scope_writes_are_refused_before_transport(self):
+        transport = Mock()
+        client = DevBrokerHost(transport, read_roots=(str(ROOT),),
+                               edit_pilot=True, create_pilot=True)
+        # Lexical synthetic paths only; no files or folders are created.
+        outside = str(ROOT.parent / "outside-broker-synthetic" / "note.txt")
+        inside = str(ROOT / "tests" / "broker-note.txt")
+        cases = (("create_directory", {"path": outside}),
+                 ("create_file", {"path": outside, "content": "new"}),
+                 ("move_file", {"source": outside, "destination": inside}),
+                 ("move_file", {"source": inside, "destination": outside}),
+                 ("request_source_patch_dev", {"path": outside, "old_text": "old",
+                                               "new_text": "new", "expected_sha256": SHA}),
+                 ("request_text_edit", {"path": outside, "content": "new", "expected_sha256": SHA}),
+                 ("request_text_create", {"path": outside, "content": "new"}))
+        for action, arguments in cases:
+            with self.subTest(action=action, arguments=tuple(arguments)):
+                if action == "request_text_edit":
+                    result = client._edit_review_pilot.request(**arguments)
+                elif action == "request_text_create":
+                    result = client._edit_review_pilot.request_create(**arguments)
+                else:
+                    result = client.dev_mutate(action, **arguments)
+                self.assertEqual(result, {"status": "DENY", "error": "FullScopeRequired"})
+                transport.request.assert_not_called()
+
+
 class ToolParityTests(unittest.TestCase):
     def setUp(self):
         self.backend_host = legacy_host()
@@ -127,10 +155,11 @@ class ToolParityTests(unittest.TestCase):
     def test_dev_writers_reach_the_broker_only(self):
         with patch("sora_commander_next.dev_rdc_compat.mutate",
                    return_value={"status": "OK"}) as mutate:
-            cases = (("create_directory", {"path": r"D:\x\new"}),
-                     ("create_file", {"path": r"D:\x\new.txt", "content": "日本語"}),
-                     ("move_file", {"source": r"D:\x\a", "destination": r"D:\x\b"}),
-                     ("request_source_patch_dev", {"path": r"D:\x\a.py", "old_text": "a",
+            cases = (("create_directory", {"path": str(ROOT / "tests" / "broker-new")}),
+                     ("create_file", {"path": str(ROOT / "tests" / "broker-new.txt"), "content": "日本語"}),
+                     ("move_file", {"source": str(ROOT / "tests" / "broker-a.txt"),
+                                    "destination": str(ROOT / "tests" / "broker-b.txt")}),
+                     ("request_source_patch_dev", {"path": str(ROOT / "tests" / "broker-a.py"), "old_text": "a",
                                                    "new_text": "b", "expected_sha256": SHA}))
             for name, arguments in cases:
                 with self.subTest(name=name):
@@ -140,39 +169,46 @@ class ToolParityTests(unittest.TestCase):
 
     def test_large_japanese_file_fits_the_request_limit(self):
         content = "あ" * 21000  # 63 KB of UTF-8, six bytes each once escaped.
+        path = str(ROOT / "tests" / "broker-big.txt")
         with patch("sora_commander_next.dev_rdc_compat.mutate",
                    return_value={"status": "OK"}) as mutate:
-            result = call(self.server, "create_file", {"path": r"D:\x\big.txt", "content": content})
+            result = call(self.server, "create_file", {"path": path, "content": content})
         self.assertEqual(result["status"], "OK")
-        self.assertEqual(mutate.call_args.kwargs["content"], content)
+        mutate.assert_called_once_with("create_file", (str(ROOT),), path=path, content=content)
 
     def test_edit_tools_reach_the_brokers_pilot(self):
+        edit_path = str(ROOT / "tests" / "broker-a.txt")
+        create_path = str(ROOT / "tests" / "broker-b.txt")
         result = call(self.server, "request_text_edit", {
-            "path": r"D:\x\a.txt", "content": "new", "expected_sha256": SHA})
+            "path": edit_path, "content": "new", "expected_sha256": SHA})
         self.assertEqual(result["pending_id"], "p" * 32)
-        self.assertEqual(self.pilot.calls[-1], ("request", r"D:\x\a.txt", "new", SHA))
-        result = call(self.server, "request_text_create", {"path": r"D:\x\b.txt", "content": "c"})
+        self.assertEqual(self.pilot.calls[-1], ("request", edit_path, "new", SHA))
+        result = call(self.server, "request_text_create", {"path": create_path, "content": "c"})
         self.assertEqual(result["pending_id"], "q" * 32)
+        self.assertEqual(self.pilot.calls[-1], ("create", create_path, "c"))
         result = call(self.server, "edit_review_status", {"pending_id": "p" * 32})
         self.assertEqual(result["status"], "COMMITTED")
 
     def test_edit_wait_tool_observes_through_the_broker_without_resubmitting(self):
+        path = str(ROOT / "tests" / "broker-a.txt")
         result = call(self.server, "request_text_edit_wait", {
-            "path": r"D:\x\a.txt", "content": "new", "expected_sha256": SHA,
+            "path": path, "content": "new", "expected_sha256": SHA,
             "wait_seconds": 1.0})
         self.assertEqual(result["status"], "COMMITTED")
-        self.assertEqual(len([c for c in self.pilot.calls if c[0] == "request"]), 1)
+        self.assertEqual([c for c in self.pilot.calls if c[0] == "request"],
+                         [("request", path, "new", SHA)])
 
     def test_edit_failures_give_the_same_fixed_results_as_today(self):
+        path = str(ROOT / "tests" / "broker-a.txt")
         self.pilot.error = StalePreviewError("secret path")
         result = call(self.server, "request_text_edit", {
-            "path": r"D:\x\a.txt", "content": "n", "expected_sha256": SHA})
+            "path": path, "content": "n", "expected_sha256": SHA})
         self.assertEqual(result, {"status": "ERROR", "error": "STALE_SHA256"})
         self.pilot.error = RuntimeError("secret path")
         result = call(self.server, "request_text_edit", {
-            "path": r"D:\x\a.txt", "content": "n", "expected_sha256": SHA})
+            "path": path, "content": "n", "expected_sha256": SHA})
         self.assertEqual(result, {"status": "ERROR", "error": "EDIT_REJECTED"})
-        result = call(self.server, "request_text_create", {"path": r"D:\x\a.txt", "content": "n"})
+        result = call(self.server, "request_text_create", {"path": path, "content": "n"})
         self.assertEqual(result, {"status": "ERROR", "error": "CREATE_REJECTED"})
 
     def test_interactive_is_denied_with_no_frame_sent(self):
@@ -210,7 +246,8 @@ class ToolParityTests(unittest.TestCase):
         self.assertEqual(call(server, "ping", {})["status"], "OK")
         self.assertEqual(call(server, "status", {})["status"], "UNAVAILABLE")
         self.assertIs(call(server, "status", {})["remote_ready"], False)
-        self.assertEqual(call(server, "create_file", {"path": r"D:\x\a", "content": "c"})["status"],
+        self.assertEqual(call(server, "create_file", {
+            "path": str(ROOT / "tests" / "broker-absent.txt"), "content": "c"})["status"],
                          "UNAVAILABLE")
         self.assertEqual(call(server, "run_command_wait", {
             "executable": r"C:\x.exe", "argv": [], "cwd": str(ROOT)})["status"], "UNAVAILABLE")

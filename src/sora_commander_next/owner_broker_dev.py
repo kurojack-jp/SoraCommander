@@ -35,8 +35,9 @@ class DevBrokerHost(BrokerHost):
     dev_broker_client = True
     _max_request_bytes = MAX_REPLY_BYTES
 
-    def __init__(self, transport, *, read_roots=(), edit_pilot=False, create_pilot=False):
-        super().__init__(transport, read_roots=read_roots)
+    def __init__(self, transport, *, read_roots=(), read_only_roots=(),
+                 edit_pilot=False, create_pilot=False):
+        super().__init__(transport, read_roots=read_roots, read_only_roots=read_only_roots)
         if type(edit_pilot) is not bool or type(create_pilot) is not bool:
             raise ValueError("explicit boolean pilot opt-in required")
         if create_pilot and not edit_pilot:
@@ -59,6 +60,22 @@ class DevBrokerHost(BrokerHost):
     def dev_mutate(self, operation, **arguments):
         return self._call(operation, **arguments)
 
+    def _call(self, action, **arguments):
+        # The Broker repeats admission against its own startup snapshot. A
+        # narrower client snapshot must not forward writes/cwd in its read-only roots.
+        fields = {"run_command": ("cwd",), "run_command_wait": ("cwd",),
+                  "create_directory": ("path",), "create_file": ("path",),
+                  "move_file": ("source", "destination"),
+                  "request_source_patch_dev": ("path",),
+                  "request_source_create": ("path",), "request_source_patch": ("path",),
+                  "request_text_edit": ("path",), "request_text_create": ("path",)}
+        try:
+            for field in fields.get(action, ()):
+                self.policy.require_full_path(arguments.get(field))
+        except (OSError, ValueError, TypeError):
+            return {"status": "DENY", "error": "FullScopeRequired"}
+        return super()._call(action, **arguments)
+
 
 class OwnerBrokerBackend:
     """The actions OwnerBrokerService may reach, on the existing Host."""
@@ -79,6 +96,13 @@ class OwnerBrokerBackend:
     def _mutate(self, operation, **arguments):
         from .dev_rdc_compat import mutate
         with self._host.policy.lock:
+            try:
+                fields = ("source", "destination") if operation == "move_file" else ("path",)
+                for field in fields:
+                    self._host.policy.require_full_path(arguments.get(field))
+            except (OSError, ValueError, TypeError):
+                return {"status": "REJECTED", "outcome": "NOT_STARTED",
+                        "error": "DevOperationFailed", "retry_allowed": False}
             return mutate(operation, tuple(self._host.policy.roots), **arguments)
 
     def create_directory(self, **arguments):
@@ -102,6 +126,7 @@ class OwnerBrokerBackend:
     def request_text_edit(self, *, path, content, expected_sha256):
         # The same fixed results as the MCP adapter gives in one process today.
         try:
+            self._host.policy.require_full_path(path)
             return self._pilot().request(path, content, expected_sha256)
         except StalePreviewError:
             return {"status": "ERROR", "error": "STALE_SHA256"}
@@ -110,6 +135,7 @@ class OwnerBrokerBackend:
 
     def request_text_create(self, *, path, content):
         try:
+            self._host.policy.require_full_path(path)
             return self._pilot().request_create(path, content)
         except Exception:
             return {"status": "ERROR", "error": "CREATE_REJECTED"}

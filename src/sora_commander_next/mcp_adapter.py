@@ -65,7 +65,7 @@ def _local_registered_catalog(server, host):
         "registered_tool_names": names,
         "tool_schema_sha256": hashlib.sha256(serialized).hexdigest(),
         "installed_distribution_version": installed_version,
-        "read_roots_configured": bool(host.policy.roots),
+        "read_roots_configured": bool(host.policy.read_roots),
         "edit_pilot_attached": getattr(host, "_edit_review_pilot", None) is not None,
         "chatgpt_tool_visibility": "UNVERIFIED",
         "protected_broker_acceptance": "NOT_ESTABLISHED_BY_CATALOG",
@@ -617,6 +617,13 @@ Use to preview one literal exact-text source replacement against the expected SH
             if dev_client:
                 return host.dev_mutate(operation, **arguments)
             with host.policy.lock:
+                try:
+                    fields = ("source", "destination") if operation == "move_file" else ("path",)
+                    for field in fields:
+                        host.policy.require_full_path(arguments.get(field))
+                except (OSError, ValueError, TypeError):
+                    return {"status": "REJECTED", "outcome": "NOT_STARTED",
+                            "error": "DevOperationFailed", "retry_allowed": False}
                 return mutate(operation, tuple(host.policy.roots), **arguments)
 
         @tool_decorator()
@@ -659,6 +666,7 @@ Use to preview one literal exact-text source replacement against the expected SH
         def request_text_edit(path: Annotated[str, Field(description="Path to the target within the already-configured Owner read/edit roots; path alone grants no access.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")], expected_sha256: Annotated[str, Field(description="Expected 64-character lowercase SHA-256 of current file content; stale values must fail.")]) -> dict[str, Any]:
             """Submit one full-content text replacement for local Owner review after inspecting the SHA-bound preview. Can write on Owner approval; never call twice after timeout. Use edit_review_status/await_edit_result with pending_id."""
             try:
+                host.policy.require_full_path(path)
                 return pilot.request(path, content, expected_sha256)
             except StalePreviewError:
                 return {"status": "ERROR", "error": "STALE_SHA256"}
@@ -699,6 +707,7 @@ Use after a pending edit/create review to wait for that same decision/outcome. N
             def request_text_create(path: Annotated[str, Field(description="Proposed new file path in permitted Owner edit scope; must not overwrite.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")]) -> dict[str, Any]:
                 """Submit one new text file creation for local Owner review. Only enabled in the explicit DEV edit pilot; do not overwrite existing files or resubmit an uncertain result. Prefer preview_source_create first."""
                 try:
+                    host.policy.require_full_path(path)
                     return pilot.request_create(path, content)
                 except Exception:
                     return {'status': 'ERROR', 'error': 'CREATE_REJECTED'}
@@ -720,9 +729,9 @@ Preferred one-shot new-file creation proposal with bounded Owner review wait. Us
     @read_errors_only
     def list_folder(path: Annotated[str, Field(description="Existing directory under Owner-approved read roots.")], limit: Annotated[int, Field(description="Maximum number of returned entries, 1 to 200; default 100.")] = 100, depth: Annotated[int, Field(description="Additional directory levels, 0 to 4; default 0 preserves immediate-child schema. Recursive entries include a relative path.")] = 0) -> dict[str, Any]:
         """List bounded entries under Owner-approved read roots. Read-only; depth=0 preserves immediate children and the original schema. Depth 1 to 4 adds relative paths and bounded recursion, excluding private names, links and denied folders. Limit bounds output, not authorization."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return list_folder_readonly(path, host.policy.roots, limit=limit, depth=depth)
+        return list_folder_readonly(path, host.policy.read_roots, limit=limit, depth=depth)
 
     @tool_decorator()
     @read_errors_only
@@ -731,17 +740,17 @@ Preferred one-shot new-file creation proposal with bounded Owner review wait. Us
         """Continue a bounded listing without widening Owner read roots.
 
 Use to page a folder listing when list_folder's output is insufficient. Provide the same path, entry offset and limit. Read-only and confined to Owner read roots."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return list_folder_page_readonly(path, host.policy.roots,
+        return list_folder_page_readonly(path, host.policy.read_roots,
                                           offset=offset, limit=limit)
 
     @tool_decorator()
     def read_text_file(path: Annotated[str, Field(description="Path to the target within the already-configured Owner read/edit roots; path alone grants no access.")], max_bytes: Annotated[int, Field(description="Maximum UTF-8 file bytes, 1 to 65536; default 65536.")] = 65536) -> dict[str, Any]:
         """Use for a bounded UTF-8 read of an existing file within configured Owner read roots. Never modify the file; may return sensitive text, so share only when appropriate."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return read_text_readonly(path, host.policy.roots, max_bytes=max_bytes)
+        return read_text_readonly(path, host.policy.read_roots, max_bytes=max_bytes)
 
     @tool_decorator()
     @read_errors_only
@@ -750,9 +759,9 @@ Use to page a folder listing when list_folder's output is insufficient. Provide 
         """Read a UTF-8 page within existing Owner-configured read roots.
 
 Use for large UTF-8 files needing byte-offset pagination within approved read roots. Reuse the returned byte cursor rather than guessing; no file modifications."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return read_text_page_readonly(path, host.policy.roots,
+        return read_text_page_readonly(path, host.policy.read_roots,
                                        offset=offset, max_bytes=max_bytes)
     @tool_decorator()
     @read_errors_only
@@ -761,9 +770,9 @@ Use for large UTF-8 files needing byte-offset pagination within approved read ro
         """Bounded name-only discovery inside configured Owner read roots.
 
 Use to discover filenames by name under an allowed directory within bounded depth/result count. This is path discovery, not a content search or write authorization."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return find_files_readonly(path, host.policy.roots, name=name,
+        return find_files_readonly(path, host.policy.read_roots, name=name,
                                    max_results=max_results, depth=depth)
 
     @tool_decorator()
@@ -773,9 +782,9 @@ Use to discover filenames by name under an allowed directory within bounded dept
         """Literal UTF-8 source search; results include relative path and line.
 
 Use for literal text search within bounded UTF-8 files under approved roots. Supply the exact search text, depth and result cap. Search results may expose sensitive lines; read-only."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return search_code_readonly(path, host.policy.roots, text=text,
+        return search_code_readonly(path, host.policy.read_roots, text=text,
                                     max_results=max_results, depth=depth)
 
     @tool_decorator()
@@ -784,9 +793,9 @@ Use for literal text search within bounded UTF-8 files under approved roots. Sup
         """Read-only file size and bounded digest; never authorizes a write.
 
 Use for non-mutating file or directory metadata checks on an allowed path, including size/digest when available. Not a write grant and not proof of user consent."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return path_info_readonly(path, host.policy.roots)
+        return path_info_readonly(path, host.policy.read_roots)
 
     @tool_decorator()
     @read_errors_only
@@ -795,9 +804,9 @@ Use for non-mutating file or directory metadata checks on an allowed path, inclu
         """Read numbered UTF-8 source lines without creating a new grant.
 
 Use when exact numbered source lines are needed for review. Choose 1-based start_line and a bounded max_lines; no edits or permission changes."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return read_text_lines_readonly(path, host.policy.roots,
+        return read_text_lines_readonly(path, host.policy.read_roots,
                                         start_line=start_line, max_lines=max_lines)
 
     @tool_decorator()
@@ -807,10 +816,10 @@ Use when exact numbered source lines are needed for review. Choose 1-based start
         """Read up to eight bounded existing UTF-8 files in one MCP call.
 
 Use to read up to eight existing UTF-8 files in one bounded, read-only call. Provide distinct paths in approved roots; each file has its own byte limit."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
         return read_many_text_files_readonly(
-            paths, host.policy.roots, max_bytes_per_file=max_bytes_per_file)
+            paths, host.policy.read_roots, max_bytes_per_file=max_bytes_per_file)
 
     @tool_decorator()
     @read_errors_only
@@ -819,10 +828,10 @@ Use to read up to eight existing UTF-8 files in one bounded, read-only call. Pro
         """Compare two Owner-scoped existing files without editing either.
 
 Use to compare two existing Owner-scoped text files as a read-only diff. before_path and after_path are files, not patches; context_lines adjusts displayed context only."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
         return compare_text_files_readonly(
-            before_path, after_path, host.policy.roots, context_lines=context_lines)
+            before_path, after_path, host.policy.read_roots, context_lines=context_lines)
 
     @tool_decorator()
     @read_errors_only
@@ -831,9 +840,9 @@ Use to compare two existing Owner-scoped text files as a read-only diff. before_
         """Read a bounded UTF-8 tail or resume from a previous byte cursor.
 
 Use to read a bounded UTF-8 tail (offset -1) or resume at an explicit byte cursor. Useful for logs and evolving files; never creates or changes them."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return read_text_chunk_readonly(path, host.policy.roots,
+        return read_text_chunk_readonly(path, host.policy.read_roots,
                                         offset=offset, max_bytes=max_bytes)
 
     @tool_decorator()
@@ -842,9 +851,9 @@ Use to read a bounded UTF-8 tail (offset -1) or resume at an explicit byte curso
         """Stream a bounded file hash, with no install/execute permissions.
 
 Use to compute the SHA-256 of an approved existing file without reading full contents into chat or changing permissions. Hash alone does not establish a trusted signature."""
-        if not host.policy.roots:
+        if not host.policy.read_roots:
             raise PermissionError("read roots not configured")
-        return sha256_file_readonly(path, host.policy.roots)
+        return sha256_file_readonly(path, host.policy.read_roots)
 
     @tool_decorator()
     def tool_catalog() -> dict[str, Any]:

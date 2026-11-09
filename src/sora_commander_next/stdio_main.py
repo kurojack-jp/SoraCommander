@@ -168,7 +168,8 @@ def main():
                    if result_enabled else None)
         jobs = JobManager(journal_path=journal, output_archive_path=archive,
                           protected_stage=True)
-    host = Host(policy=Policy(roots=roots), owner=guard.sid, jobs=jobs)
+    host = Host(policy=Policy(roots=roots.full, read_only_roots=roots.read_only),
+                owner=guard.sid, jobs=jobs)
     host.attach_owner_review_local(OwnerReviewDispatcher(WindowsOwnerController(host)))
     # Explicit secondary opt-in; disposable tests/real_mcp files only.
     if os.environ.get('SORA_NEXT_EDIT_PILOT') == '1':

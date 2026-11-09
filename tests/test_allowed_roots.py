@@ -76,7 +76,7 @@ class RootRuleTests(unittest.TestCase):
                 patch.object(roots, "_locations", side_effect=AssertionError("must not read")), \
                 patch.object(Path, "open", side_effect=AssertionError("must not open")):
             self.assertEqual(roots.startup_allowed_roots("C:/Checkout", "tests", {}),
-                             (str(Path("C:/Checkout/tests")),))
+                             roots.AllowedRoots((str(Path("C:/Checkout/tests")),)))
 
 
 @unittest.skipUnless(os.name == "nt", "Windows inherited fixture")
@@ -105,17 +105,18 @@ class RootConfigTests(unittest.TestCase):
             return roots.startup_allowed_roots(self.repo, "development")
 
     def test_absent_configuration_keeps_checkout_only(self):
-        self.assertEqual(self.load(), (str(self.repo),))
+        self.assertEqual(self.load(), roots.AllowedRoots((str(self.repo),)))
 
     def test_comments_blank_lines_and_one_read_snapshot(self):
-        self.config.write_text("# folders\n\nC:/Work/One\n C:/Work/Two \n", encoding="utf-8")
+        self.config.write_text("# folders\n\nC:/Work/One\n C:/Work/Two \nread:  C:/Work/Notes\n", encoding="utf-8")
         original = Path.open
         with patch.object(Path, "open", autospec=True,
                           side_effect=lambda p, *a, **kw: original(p, *a, **kw)) as opened:
             snapshot = self.load()
         self.assertEqual(opened.call_count, 1)
         self.config.write_text("C:/Work/Three\n", encoding="utf-8")
-        self.assertEqual(snapshot, (str(Path("C:/Work/One")), str(Path("C:/Work/Two"))))
+        self.assertEqual(snapshot, roots.AllowedRoots(
+            (str(Path("C:/Work/One")), str(Path("C:/Work/Two"))), (str(Path("C:/Work/Notes")),)))
 
     def test_one_bad_line_refuses_every_entry(self):
         self.config.write_text("# comment\nC:/Work/Good\nrelative-secret-value\n", encoding="utf-8")
@@ -126,7 +127,7 @@ class RootConfigTests(unittest.TestCase):
 
     def test_sixteen_entries_allowed_seventeenth_refused(self):
         self.config.write_text("\n".join(f"C:/Work/Project{i}" for i in range(16)), encoding="utf-8")
-        self.assertEqual(len(self.load()), 16)
+        self.assertEqual(len(self.load().read), 16)
         with self.config.open("a", encoding="utf-8") as stream:
             stream.write("\nC:/Work/Extra\n")
         with self.assertRaises(roots.AllowedRootsError) as caught:
@@ -146,7 +147,7 @@ class RootConfigTests(unittest.TestCase):
 class RootCompositionTests(unittest.TestCase):
     def test_stdio_uses_the_same_startup_snapshot_once(self):
         from sora_commander_next import stdio_main
-        selected = (str(Path("C:/Work/One")), str(Path("C:/Work/Two")))
+        selected = roots.AllowedRoots((str(Path("C:/Work/One")),), (str(Path("C:/Work/Two")),))
         guard = SimpleNamespace(sid="synthetic-owner", verify=Mock())
         with patch.dict(os.environ, {"SORA_NEXT_OWNER_REVIEW_PILOT": "1",
                                      "SORA_NEXT_OWNER_PROFILE": "development"}, clear=True), \
@@ -159,7 +160,9 @@ class RootCompositionTests(unittest.TestCase):
             stdio_main.main()
             host = serve.call_args.args[0]
             try:
-                self.assertEqual(host.policy.roots, selected)
+                self.assertEqual(host.policy.roots, selected.full)
+                self.assertEqual(host.policy.read_only_roots, selected.read_only)
+                self.assertEqual(host.policy.read_roots, selected.read)
                 self.assertEqual(loaded.call_count, 1)
             finally:
                 host.close()
@@ -169,6 +172,7 @@ class RootCompositionTests(unittest.TestCase):
         host = Mock()
         host.jobs._ledger = None
         host.policy.roots = ("private-folder-one", "private-folder-two")
+        host.policy.read_only_roots = ("private-read-folder",)
         guard = SimpleNamespace(sid="synthetic-owner", verify=Mock())
         with patch.object(backend, "OwnerSessionGuard", return_value=guard), \
                 patch.object(backend, "build_backend_host", return_value=host), \
@@ -178,14 +182,15 @@ class RootCompositionTests(unittest.TestCase):
                 patch.object(backend.sys, "stdin", []), \
                 patch.object(backend.sys, "stdout", new_callable=io.StringIO) as output:
             self.assertEqual(backend.main(["--pipe-name", "synthetic-pipe"]), 0)
-            self.assertIn("[INFO] Allowed folders: 2", output.getvalue())
+            self.assertIn("[INFO] Allowed folders: 2 full, 1 read-only for file tools", output.getvalue())
             self.assertNotIn("private-folder", output.getvalue())
+            self.assertNotIn("private-read-folder", output.getvalue())
             server.return_value.start.assert_called_once()
 
     def test_backend_and_client_use_the_shared_startup_snapshot(self):
         from sora_commander_next import owner_broker_main as backend
         from sora_commander_next import owner_broker_client_main as client
-        selected = (str(Path("C:/Work/One")), str(Path("C:/Work/Two")))
+        selected = roots.AllowedRoots((str(Path("C:/Work/One")),), (str(Path("C:/Work/Two")),))
         guard = SimpleNamespace(sid="synthetic-owner")
         env = {"SORA_NEXT_OWNER_PROFILE": "development"}
         with patch.object(backend, "startup_allowed_roots", return_value=selected) as back_roots, \
@@ -194,7 +199,9 @@ class RootCompositionTests(unittest.TestCase):
                 patch.object(backend.Host, "attach_owner_review_local"):
             host = backend.build_backend_host(guard, "C:/Checkout", env)
             try:
-                self.assertEqual(host.policy.roots, selected)
+                self.assertEqual(host.policy.roots, selected.full)
+                self.assertEqual(host.policy.read_only_roots, selected.read_only)
+                self.assertEqual(host.policy.read_roots, selected.read)
             finally:
                 host.close()
             back_roots.assert_called_once_with("C:/Checkout", "development", env)
@@ -202,7 +209,8 @@ class RootCompositionTests(unittest.TestCase):
                 patch.object(client, "OwnerBrokerPipeClient") as pipe, \
                 patch.object(client, "DevBrokerHost") as factory:
             client.build_client_host(guard, "C:/Checkout", env, pipe_name="synthetic-pipe")
-            self.assertEqual(factory.call_args.kwargs["read_roots"], selected)
+            self.assertEqual(factory.call_args.kwargs["read_roots"], selected.full)
+            self.assertEqual(factory.call_args.kwargs["read_only_roots"], selected.read_only)
             client_roots.assert_called_once_with("C:/Checkout", "development", env)
             pipe.assert_called_once_with(pipe_name="synthetic-pipe")
 
