@@ -67,6 +67,10 @@ def canonical_fixture_admission():
     resolution, root containment, link and later IO/identity checks are unchanged.
     Module-level patches assume sequential tests in one interpreter.
     """
+    # Import before patching: a first import binds file_reads._check by value.
+    # Importing inside the patches would retain that wrapper after teardown.
+    modules = tuple(importlib.import_module("sora_commander_next." + name)
+                    for name in _CHECK_ALIASES)
     real_check = _reads._check
     full_components = _reads._READ_DENY_COMPONENTS
     real_name_denied = _reads._read_name_denied
@@ -93,8 +97,7 @@ def canonical_fixture_admission():
         stack.enter_context(patch.object(
             _reads, "_READ_DENY_COMPONENTS", full_components - {"temp"}))
         stack.enter_context(patch.object(_reads, "_check", check))
-        for name in _CHECK_ALIASES:
-            module = importlib.import_module("sora_commander_next." + name)
+        for module in modules:
             if getattr(module, "_check", None) is real_check:
                 stack.enter_context(patch.object(module, "_check", check))
         yield check

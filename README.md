@@ -2,6 +2,8 @@
 
 **Ask in an ordinary ChatGPT chat, and ChatGPT works on your Windows PC. You approve each step in a window on your screen.**
 
+![Sora Commander demo: ask in ChatGPT, approve on your PC, see the result](docs/demo.gif)
+
 There is no separate app or terminal to talk to. You chat with ChatGPT as usual, and it can read your files, run commands, check the results and keep going, in the same conversation:
 
 - "Run the tests in my project folder and tell me what failed."
@@ -77,6 +79,8 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 ## 日本語
 
 **いつもの ChatGPT のチャットで頼むだけで、ChatGPT があなたの Windows PC で作業します。1 つずつ、画面の窓で承認します。**
+
+![Sora Commander のデモ：ChatGPT で頼んで、PC で承認して、結果を見る](docs/demo.gif)
 
 別のアプリやターミナルで話す必要はありません。普段どおり ChatGPT とチャットするだけで、同じ会話の中でファイルを読み、コマンドを実行し、結果を確かめて、次の作業に進めます。
 
