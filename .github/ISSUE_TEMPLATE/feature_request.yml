@@ -1,0 +1,24 @@
+{
+  "name": "Feature request / 機能の提案",
+  "description": "Explain what you want to do and what is difficult now. / やりたいことと、今困っていることを説明します。",
+  "body": [
+    {
+      "type": "markdown",
+      "attributes": {
+        "value": "**Do not paste API keys, tunnel IDs, or personal files or paths. If you have pasted a key, revoke it immediately in OpenAI's dashboard.**\n\n**API キー、トンネル ID、個人のファイルやパスを貼らないでください。キーを貼ってしまったら、すぐに OpenAI の画面で無効にしてください。**"
+      }
+    },
+    {
+      "type": "textarea",
+      "id": "goal",
+      "attributes": {"label": "What would you like to do? / やりたいこと"},
+      "validations": {"required": true}
+    },
+    {
+      "type": "textarea",
+      "id": "problem",
+      "attributes": {"label": "What is difficult now? / 今困っていること"},
+      "validations": {"required": true}
+    }
+  ]
+}

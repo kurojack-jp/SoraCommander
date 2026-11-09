@@ -1,0 +1,79 @@
+{
+  "name": "Bug report / 不具合の報告",
+  "description": "Report a reproducible problem. / 再現できる不具合を報告します。",
+  "body": [
+    {
+      "type": "markdown",
+      "attributes": {
+        "value": "**Do not paste API keys, tunnel IDs, or personal files or paths. If you have pasted a key, revoke it immediately in OpenAI's dashboard.**\n\n**API キー、トンネル ID、個人のファイルやパスを貼らないでください。キーを貼ってしまったら、すぐに OpenAI の画面で無効にしてください。**"
+      }
+    },
+    {
+      "type": "input",
+      "id": "windows-version",
+      "attributes": {
+        "label": "Windows version / Windows のバージョン",
+        "description": "Version and build only; omit your username and PC name. / バージョンとビルドだけを書き、ユーザー名や PC 名は書かないでください。"
+      },
+      "validations": {"required": true}
+    },
+    {
+      "type": "input",
+      "id": "python-version",
+      "attributes": {
+        "label": "Python version / Python のバージョン",
+        "description": "Version only; do not paste the installation path. / バージョンだけを書き、インストール先のパスは貼らないでください。"
+      },
+      "validations": {"required": true}
+    },
+    {
+      "type": "dropdown",
+      "id": "startup-mode",
+      "attributes": {
+        "label": "Startup mode / 起動モード",
+        "options": ["Broker mode / Broker モード", "Usual mode / 普段のモード"]
+      },
+      "validations": {"required": true}
+    },
+    {
+      "type": "dropdown",
+      "id": "administrator",
+      "attributes": {
+        "label": "Running as administrator? / 管理者権限で動かしていますか？",
+        "options": ["Yes / はい", "No / いいえ", "Not sure / 分かりません"]
+      },
+      "validations": {"required": true}
+    },
+    {
+      "type": "textarea",
+      "id": "reproduction",
+      "attributes": {
+        "label": "Steps to reproduce / 再現手順",
+        "description": "Describe the steps without keys, tunnel IDs, personal files or paths. / キー、トンネル ID、個人のファイルやパスを書かずに、手順を説明してください。"
+      },
+      "validations": {"required": true}
+    },
+    {
+      "type": "textarea",
+      "id": "expected",
+      "attributes": {"label": "Expected behavior / 期待した動作"},
+      "validations": {"required": true}
+    },
+    {
+      "type": "textarea",
+      "id": "actual",
+      "attributes": {"label": "Actual behavior / 実際の動作"},
+      "validations": {"required": true}
+    },
+    {
+      "type": "textarea",
+      "id": "messages",
+      "attributes": {
+        "label": "Displayed messages / 表示されたメッセージ",
+        "description": "Before pasting, remove API keys, tunnel IDs, personal file contents and paths. Do not attach full logs or screenshots containing them. / 貼る前に API キー、トンネル ID、個人のファイルの内容やパスを消してください。それらが含まれるログ全文やスクリーンショットも添付しないでください。",
+        "render": "text"
+      },
+      "validations": {"required": false}
+    }
+  ]
+}
