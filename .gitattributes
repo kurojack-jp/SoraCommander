@@ -1,0 +1,6 @@
+* text=auto
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+src/sora_commander_next/i18n/*.json -text
+*.png binary
+*.ico binary

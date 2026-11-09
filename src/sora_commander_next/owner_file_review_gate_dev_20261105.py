@@ -1,0 +1,128 @@
+"""DEV_ONLY / NOT_REGISTERED: one local Owner window for one dev_rdc_compat proposal.
+
+Nothing connected imports this yet. It answers APPROVE, DENY, EXPIRED or ERROR and
+never raises. APPROVE is a local answer only, not a grant: the caller keeps every
+write check. Any doubt gives ERROR or EXPIRED, with no fallback to another window.
+"""
+import hmac
+import json
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+from threading import Thread
+from time import monotonic
+
+from .owner_file_review_localized_dev_20261104 import bound_proposal
+from .windows_job import WindowsJob
+from .windows_session_events import OwnerSessionEventLatch
+
+DEV_ONLY = True
+NOT_REGISTERED = True
+DIALOG_SCRIPT = Path(__file__).resolve().with_name("owner_file_dialog_localized.py")
+OWNER_UI_LOCALE = "ja"  # Owner decision F4; the same fixed value as the command window
+MAX_REQUEST = 1048576  # also fixed in the child
+MAX_SECONDS = 45.0
+
+
+def request_frame(nonce, proposal, seconds, locale=OWNER_UI_LOCALE):
+    """The one line sent to the child. Too large or malformed raises, and no window opens."""
+    bound = bound_proposal(proposal, review_id=secrets.token_hex(8), seconds=seconds, locale=locale)
+    presentation = bound.presentation
+    screen = presentation.screen
+    frame = json.dumps({
+        "nonce": nonce, "seconds": seconds, "locale": locale, "kind": screen.kind,
+        "title": screen.title, "heading": screen.heading, "caution": screen.caution,
+        "information": screen.information, "body": screen.body, "labels": list(presentation.labels),
+    }, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n"
+    if len(frame) > MAX_REQUEST:
+        raise ValueError("file review too large for safe UI display")
+    return frame
+
+
+def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=OWNER_UI_LOCALE):
+    child = job = latch = None
+    expired = False
+    try:
+        if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SECONDS:
+            raise ValueError("invalid file review time")
+        nonce = secrets.token_hex(32)
+        payload = request_frame(nonce, proposal, seconds, locale)
+        # Register notifications before the window. Any session change ends this review.
+        latch = OwnerSessionEventLatch(guard._identity.session_id).start()
+        guard.verify()
+        latch.verify()
+        if not DIALOG_SCRIPT.is_file() or not DIALOG_SCRIPT.is_absolute():
+            raise PermissionError("trusted Owner dialog missing")
+        job = WindowsJob()
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-X", "utf8", str(DIALOG_SCRIPT)],
+            cwd=str(DIALOG_SCRIPT.parent), shell=False, creationflags=0x00000004, close_fds=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        job.attach_and_resume(child)
+        guard.verify_process(child.pid)
+        latch.verify()
+        answer = {}
+
+        def collect():
+            try:
+                answer["output"], _ = child.communicate(input=payload, timeout=seconds + .5)
+            except subprocess.TimeoutExpired:
+                answer["timeout"] = True
+            except Exception:
+                answer["error"] = True
+        reader = Thread(target=collect, daemon=True)
+        reader.start()
+        deadline = monotonic() + seconds + .5
+        while reader.is_alive():
+            latch.verify()
+            guard.verify()
+            guard.verify_process(child.pid)
+            reader.join(timeout=0.12)
+            if monotonic() >= deadline:
+                expired = True
+                raise PermissionError("Owner confirmation timed out")
+        if answer.get("timeout"):
+            expired = True
+            raise PermissionError("Owner confirmation timed out")
+        if answer.get("error") or "output" not in answer:
+            raise PermissionError("Owner UI did not answer")
+        output = answer["output"]
+        if child.returncode != 0 or len(output) > 512:
+            raise PermissionError("invalid Owner dialog exit")
+        response = json.loads(output.decode("ascii"))
+        if (type(response) is not dict
+                or set(response) != {"nonce", "decision"}
+                or type(response["nonce"]) is not str
+                or not hmac.compare_digest(response["nonce"], nonce)
+                or response["decision"] not in ("APPROVE", "DENY", "EXPIRED")):
+            raise PermissionError("untrusted dialog response")
+        guard.verify()
+        latch.verify()
+        return response["decision"]
+    except Exception:
+        return "EXPIRED" if expired else "ERROR"
+    finally:
+        if latch is not None:
+            try:
+                latch.close()
+            except Exception:
+                pass
+        if job is not None:
+            try:
+                job.close()
+            except Exception:
+                pass
+        if child is not None:
+            try:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=2)
+            except Exception:
+                pass
+            for pipe in (child.stdin, child.stdout):
+                try:
+                    if pipe is not None and not pipe.closed:
+                        pipe.close()
+                except Exception:
+                    pass

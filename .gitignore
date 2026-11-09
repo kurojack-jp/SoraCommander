@@ -1,0 +1,26 @@
+# keys and local state
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
+state/
+runtime/
+logs/
+temp/
+*.log
+
+# environment and build output
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# the tunnel program comes from OpenAI, not from this repository
+tools/tunnel-client/
+*.exe
+*.zip

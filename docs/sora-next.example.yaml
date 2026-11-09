@@ -1,0 +1,20 @@
+# Copy to %USERPROFILE%\.config\tunnel-client\sora-next.yaml and edit the three marked values.
+# This file holds a reference to the key file, never the key itself.
+config_version: 1
+control_plane:
+  base_url: https://api.openai.com
+  tunnel_id: REPLACE_WITH_YOUR_TUNNEL_ID
+  # Replace YOUR_NAME with your Windows user folder. Forward slashes are required.
+  api_key: file:C:/Users/YOUR_NAME/.config/tunnel-client/sora-next.key
+health:
+  listen_addr: 127.0.0.1:8080
+admin_ui:
+  open_browser: false
+log:
+  level: info
+  format: json
+mcp:
+  commands:
+    # Replace with the full path to your checkout. Forward slashes are required.
+    # The checkout path must not contain spaces. Non-ASCII paths are unverified.
+    - command: "cmd.exe /d /c C:/SoraCommander/tools/next-development-broker-client.cmd"

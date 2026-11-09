@@ -1,0 +1,14 @@
+{
+  "heading": "Command caution indicator (informational only)",
+  "unknown": "Cannot determine",
+  "attention": "Review carefully",
+  "strong": "Extra caution",
+  "unknown_reason": "The command's effects cannot be determined from its launch arguments.",
+  "runtime": "Launches an interpreter or script; contents and downstream effects are not inspected.",
+  "nested": "Runs a shell command or script supplied in launch arguments.",
+  "encoded": "Encoded or indirect command content limits review visibility.",
+  "system": "Invokes a system-management utility; effects depend on its options.",
+  "git_danger": "Launch arguments resemble a potentially destructive or remote Git operation.",
+  "destructive": "Visible launch arguments contain a potentially destructive operation.",
+  "disclaimer": "This is not a safety verdict, permission check, or guarantee. Review the COMPLETE original command and arguments. An unseen script or dependency may have other effects."
+}
