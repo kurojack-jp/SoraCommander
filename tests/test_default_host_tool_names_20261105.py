@@ -13,6 +13,10 @@ from sora_commander_next.host import Host
 from sora_commander_next.mcp_adapter import build_server
 
 DEFAULT_TOOLS = frozenset({
+    # Read-only additions; neither registration nor reads open Owner windows.
+    "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check", "list_tasks", "read_image_file",
+    # Registered by default, but execution still requires Owner approval.
+    "run_task", "ogf_cue",
     "await_command_result", "await_process_output", "compare_text_files", "create_directory", "create_file",
     "find_files", "get_config", "list_folder", "list_folder_page", "list_processes", "list_sessions", "move_file",
     "path_info", "ping", "preview_source_create", "preview_source_patch", "preview_text_edit", "previous_output",

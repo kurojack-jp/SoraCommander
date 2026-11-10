@@ -74,7 +74,7 @@ class OwnerBrokerMainTests(unittest.TestCase):
     def test_client_offers_the_full_tool_list(self):
         from sora_commander_next.mcp_adapter import _local_registered_catalog
         self.assertEqual(_local_registered_catalog(self.server, self.host)
-                         ["registered_tool_count"], 44)
+                         ["registered_tool_count"], 53)
 
     def test_status_comes_from_the_real_host_in_the_broker(self):
         status = self.call("status")

@@ -35,7 +35,8 @@ class ReadonlyParityTests(unittest.TestCase):
         return adapter.build_server(host), host
 
     def test_sdk_list_tools_and_owner_chat_gap(self):
-        for pilot, count in ((False, 31), (True, 37)):
+        # Seven read-only tools and two Owner-reviewed execution tools added.
+        for pilot, count in ((False, 40), (True, 46)):
             with self.subTest(pilot=pilot):
                 server, host = self.server(pilot=pilot)
                 definitions = asyncio.run(server.list_tools())
@@ -52,7 +53,7 @@ class ReadonlyParityTests(unittest.TestCase):
                 self.assertTrue(set(CASES) <= names - CHAT_NAMES)
                 if pilot:
                     self.assertTrue(CHAT_NAMES <= names)
-                    print("LOCAL_SDK=37 OWNER_CHAT=14 LOCAL_ONLY=" +
+                    print(f"LOCAL_SDK={count} OWNER_CHAT=14 LOCAL_ONLY=" +
                           ",".join(sorted(names - CHAT_NAMES)))
 
     def test_readers_receive_same_configured_roots(self):

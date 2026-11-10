@@ -1,7 +1,7 @@
 """D10 live-facing, data-only SDK registry diagnostic (not remote attestation)."""
 import asyncio
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tests._inherited_test_temp import inherited_test_temp
 import re
 import unittest
 from unittest.mock import patch
@@ -16,16 +16,14 @@ from sora_commander_next.edit_review_pilot import EditReviewPilot
 
 class LiveCatalogTests(unittest.TestCase):
     def setUp(self):
-        t=TemporaryDirectory(prefix="scn-tool-catalog-")
-        self.addCleanup(t.cleanup)
-        self.root=Path(t.name).resolve()
+        self.root=Path(self.enterContext(inherited_test_temp())).resolve()
 
     def test_actual_runtime_registry_catalog_matches_server_and_status(self):
         host=Host(policy=Policy(roots=(str(self.root),)))
         try:
             server=build_server(host)
             names=sorted(tool.name for tool in server._tool_manager.list_tools())
-            self.assertEqual(len(names),38)
+            self.assertEqual(len(names),47)
             _,data=asyncio.run(server.call_tool("tool_catalog",{}))
             _,status=asyncio.run(server.call_tool("status",{}))
             self.assertEqual(data["registered_tool_count"],len(names))

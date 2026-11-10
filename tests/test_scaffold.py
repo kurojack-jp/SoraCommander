@@ -283,6 +283,11 @@ class ScaffoldTests(unittest.TestCase):
         with patch.dict(sys.modules, {"mcp": ModuleType("mcp"), "mcp.server": ModuleType("mcp.server"), "mcp.server.fastmcp": fake}):
             build_server(Host())
         self.assertEqual(set(registered), {
+            # Reads without approval; registration itself performs no reads.
+            "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check",
+            "list_tasks", "read_image_file",
+            # Execution uses the existing Owner review path.
+            "run_task", "ogf_cue",
             "run_command", "run_command_wait", "await_command_result",
             "read_process_output", "await_process_output", "stop_process",
             "stop_process_wait", "ping", "status", "list_folder",

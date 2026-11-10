@@ -164,6 +164,22 @@ def main():
         import sys
         print(f"[HOLD] {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
+    from .task_presets import TaskPresetError, load_task_presets
+    try:
+        task_presets = load_task_presets(os.environ)
+    except TaskPresetError as error:
+        import sys
+        print(f"[HOLD] tasks.json: {error}", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
+    from .ogf_cue import OgfBridgeError, load_ogf_bridge
+    try:
+        ogf_bridge = load_ogf_bridge(os.environ)
+        if ogf_bridge is not None:
+            ogf_bridge.startup()
+    except (OgfBridgeError, OSError, RuntimeError, ValueError):
+        import sys
+        print('[HOLD] ogf-bridge.json: configuration or protected storage unavailable', file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
     jobs = None
     journal_enabled = os.environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"
     result_enabled = os.environ.get("SORA_NEXT_RESULT_ARCHIVE_PILOT") == "1"
@@ -180,6 +196,8 @@ def main():
     host = Host(policy=Policy(roots=roots.full, read_only_roots=roots.read_only),
                 owner=guard.sid, jobs=jobs)
     host.attach_owner_review_local(OwnerReviewDispatcher(WindowsOwnerController(host)))
+    host.task_presets = task_presets
+    host.ogf_bridge = ogf_bridge
     # Explicit secondary opt-in; disposable tests/real_mcp files only.
     if os.environ.get('SORA_NEXT_EDIT_PILOT') == '1':
         from .edit_review_pilot import EditReviewPilot

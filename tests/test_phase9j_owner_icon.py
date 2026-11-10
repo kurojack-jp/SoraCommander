@@ -51,7 +51,7 @@ class RealOwnerLogoTests(unittest.TestCase):
                                   approved_icon_sha256=APPROVED_PNG_SHA256)
             self.assertEqual(len(server.icons), 1)
             self.assertEqual(server.icons[0].sizes, ["128x128"])
-            self.assertEqual(len(server._tool_manager.list_tools()), 38)
+            self.assertEqual(len(server._tool_manager.list_tools()), 47)
             self.assertTrue(all(t.icons == server.icons for t in
                                 server._tool_manager.list_tools()))
             self.assertFalse(host.status()["remote_ready"])

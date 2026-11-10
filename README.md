@@ -33,6 +33,26 @@ Sora Commander is an MCP server for Windows. It connects to ChatGPT through Open
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
 
+## New in v0.1.5
+
+The DEV tool list with the optional edit/create pilot contains 53 tools;
+the visible count depends on the Host configuration.
+
+- `git_snapshot` reads branch, HEAD and status; `git_diff` reads changes;
+  `git_log` reads commit history; `git_show` reads a commit or file revision;
+  `git_remote_check` compares a ref with its HTTPS upstream. These need no
+  approval window. Git hooks, filters and configured programs are disabled.
+  Only the remote check uses the network; it disables prompts and credential helpers.
+- `list_tasks` lists Owner-written command presets without a window.
+  `run_task` runs one exact preset and opens the approval window every time.
+  See the INSTALL guide for the `tasks.json` format.
+- `read_image_file` reads PNG/JPEG files up to 4 MiB within allowed read folders,
+  without a window. ChatGPT must call `image(item)` on the returned image item.
+  `tools/scn_capture_window.py` captures one window as a separately approved task preset.
+- `ogf_cue` sends one bounded presentation cue to a companion app's Bridge inbox,
+  with approval every time. It is off unless the Owner creates
+  `%USERPROFILE%\.config\sora-commander\ogf-bridge.json`.
+
 ## Before you start
 
 - Windows 11, signed in to your own account
@@ -112,6 +132,18 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+v0.1.5の任意の編集・作成pilot付きDEV構成では53ツールです。表示数はHost構成によります。`git_snapshot`（状態）、`git_diff`（差分）、
+`git_log`（履歴）、`git_show`（コミットや過去のファイル）、`git_remote_check`
+（HTTPS upstreamとの比較）は承認窓なしで読み取ります。hooks・filters・設定された
+外部プログラムは無効です。通信するのはremote確認だけで、認証の入力窓とcredential helperも無効です。
+`list_tasks`はOwnerが書いたプリセットを窓なしで一覧表示し、`run_task`は毎回承認後に
+固定コマンドを実行します。`tasks.json`の形式は導入手順にあります。
+`read_image_file`は許可された読取りフォルダのPNG/JPEG（4 MiB以下）を窓なしで読み、
+ChatGPT側で画像itemに`image(item)`を呼ぶ必要があります。
+`tools/scn_capture_window.py`の単一ウィンドウ撮影は、別途承認するタスクプリセット用です。
+`ogf_cue`は連携アプリのBridge inboxへ制限された演出cueを送り、毎回承認が必要です。
+Ownerが`%USERPROFILE%\.config\sora-commander\ogf-bridge.json`を作らなければ無効です。
 
 導入は [docs/INSTALL.ja.md](docs/INSTALL.ja.md) を見てください。
 

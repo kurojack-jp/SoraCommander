@@ -125,7 +125,7 @@ class ToolParityTests(unittest.TestCase):
         self.addCleanup(reference.close)
         expected, _ = catalog(reference)
         actual, _ = catalog(self.client)
-        self.assertEqual(actual["registered_tool_count"], 44)
+        self.assertEqual(actual["registered_tool_count"], 53)
         self.assertEqual(actual["tool_schema_sha256"], expected["tool_schema_sha256"])
 
     def test_descriptions_match_todays_host(self):

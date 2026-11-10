@@ -40,7 +40,16 @@ class OwnerResultArchiveOptInTests(unittest.TestCase):
                 "SORA_NEXT_EDIT_PILOT": "0",
                 "SORA_NEXT_CREATE_PILOT": "0",
             }
+            # Isolate archive startup from unrelated Owner configuration.
+            # A configured OGF bridge validates its own protected directory
+            # through owner_journal_path twice; it never enables the archive.
+            # Loader/storage behavior is outside this mocked archive contract.
             with patch.dict(os.environ, flags), \
+                 patch("sora_commander_next.task_presets.load_task_presets",
+                       return_value=()), \
+                 patch("sora_commander_next.ogf_cue.load_ogf_bridge",
+                       return_value=None), \
+                 patch.object(stdio_main, "ensure_owner_storage"), \
                  patch.object(stdio_main, "owner_journal_path",
                               return_value=base) as owner_path, \
                  patch.object(stdio_main, "Host", FakeHost), \

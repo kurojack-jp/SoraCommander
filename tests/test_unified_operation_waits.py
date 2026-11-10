@@ -361,6 +361,11 @@ class UnifiedOperationWaitTests(unittest.TestCase):
     def test_base_tool_matrix_no_write_without_owner_opt_in(self):
         names = {t.name for t in build_server(self.host)._tool_manager.list_tools()}
         self.assertEqual(names, {
+            # Reads without approval; these do not add a write capability.
+            "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check",
+            "list_tasks", "read_image_file",
+            # Registered entrypoints, with execution gated by Owner review.
+            "run_task", "ogf_cue",
             "run_command", "run_command_wait", "await_command_result",
             "read_process_output", "await_process_output", "stop_process",
             "stop_process_wait", "ping", "status", "list_folder",
