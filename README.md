@@ -4,6 +4,8 @@
 
 ![Sora Commander demo: ask in ChatGPT, approve on your PC, see the result](docs/demo.gif)
 
+[![Sora Commander MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/kurojack-jp/SoraCommander/badges/card.svg)](https://glama.ai/mcp/servers/kurojack-jp/SoraCommander)
+
 There is no separate app or terminal to talk to. You chat with ChatGPT as usual, and it can read your files, run commands, check the results and keep going, in the same conversation:
 
 - "Run the tests in my project folder and tell me what failed."
