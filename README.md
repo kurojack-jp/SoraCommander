@@ -76,6 +76,16 @@ for the Broker pipe to be present, then starts the tunnel. Usual mode is an
 optional alternative and does not provide Broker mode's duplicate-execution
 protection after a restart.
 
+## Guided walkthrough (optional)
+
+Sora Commander and the install docs in this repository are free.
+If you would rather follow a step-by-step beginner's guide with
+screenshots for every stage — including the common errors and how
+to recover from them — a paid companion guide is available:
+
+- English edition (Gumroad): https://kurojackson.gumroad.com/l/sora-commander-guide
+- Japanese edition (note): https://note.com/kurojack_jp/n/nab0d17f9e491
+
 ## Limits
 
 - `remote_ready=false` and `LOCAL_DEMO_ONLY` are what this version reports. They mean it is not accepted for production.
