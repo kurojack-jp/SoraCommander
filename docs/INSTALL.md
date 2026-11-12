@@ -185,6 +185,12 @@ and it can do anything your account can.**
 
 ## When something goes wrong
 
+Run `.venv\Scripts\python.exe tools\scn_doctor.py` for a read-only setup check
+with fix hints. It starts nothing and never reads the tunnel key or YAML.
+Use `--lang en` or `--lang ja` to override the window language. WARN is
+informational; HOLD gives exit code 1. Restart the Broker and client after
+changing configuration.
+
 | What you see | What it means | What to do |
 |---|---|---|
 | `A tunnel is already running or port 8080 is in use` | A tunnel is up, or something else holds the port | Do not start a second one |
