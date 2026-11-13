@@ -159,7 +159,7 @@ def main():
         raise SystemExit(2) from None
     from .owner_ui_language import OwnerLanguageError, owner_ui_language
     try:
-        owner_ui_language()
+        language = owner_ui_language()
     except OwnerLanguageError as error:
         import sys
         print(f"[HOLD] {error}", file=sys.stderr, flush=True)
@@ -205,7 +205,8 @@ def main():
         # No remote MCP argument can grant it; default remains disabled.
         enable_create = os.environ.get('SORA_NEXT_CREATE_PILOT') == '1'
         host._edit_review_pilot = EditReviewPilot(
-            repo_root / 'tests' / 'real_mcp', enable_create=enable_create)
+            repo_root / 'tests' / 'real_mcp', enable_create=enable_create,
+            enable_timeout_dev=True, locale=language)
     serve_stdio(host)
 
 

@@ -47,6 +47,14 @@ def body(proposal):
 
 
 class DisplayTests(NoRealDialogTestCase):
+    def test_c5_bilingual_notices_for_all_four_operations(self):
+        for locale in ('en', 'ja'):
+            for proposal in (patch_proposal(), create_proposal(), DIRECTORY, MOVE):
+                screen = review.bound_proposal(proposal, **{**OPTIONS, 'locale': locale}).presentation.screen
+                self.assertIn('Reject declines' if locale == 'en' else '却下ボタンは提案を却下', screen.caution)
+                self.assertIn('nothing is created, moved or changed' if locale == 'en' else '作成・移動・変更は行いません', screen.caution)
+                self.assertIn('not Owner rejection' if locale == 'en' else 'Ownerの却下ではありません', screen.information)
+
     def test_a_patch_shows_readable_japanese_on_real_lines(self):
         text = body(patch_proposal())
         lines = text.split("\n")
@@ -193,9 +201,27 @@ class GateTests(NoRealDialogTestCase):
         return result
 
     def test_each_decision_comes_back(self):
-        for decision in ("APPROVE", "DENY", "EXPIRED"):
+        for decision in ("APPROVE", "DENY"):
             with self.subTest(decision=decision):
                 self.assertEqual(self.run_gate(FakeChild(decided(decision))), decision)
+
+    def test_no_answer_reuses_bound_c3_proof(self):
+        from sora_commander_next.file_edits import _VerifiedFileReviewExpiry
+        for reason in ('EXPIRED', 'CLOSED'):
+            proposal = patch_proposal()
+            observed = self.run_gate(FakeChild(decided(reason)), proposal)
+            self.assertIs(type(observed), _VerifiedFileReviewExpiry)
+            self.assertEqual(observed.reason, reason)
+            self.assertEqual(observed.write_outcome, 'NOT_STARTED')
+            self.assertEqual(observed.operation, proposal['operation'])
+            self.assertEqual(observed.path, proposal['path'])
+            self.assertEqual(observed.new_sha256, sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest())
+
+    def test_duplicate_reply_fields_are_error(self):
+        def reply(sent):
+            nonce = json.loads(sent)['nonce']
+            return ('{"nonce":"' + nonce + '","decision":"DENY","decision":"EXPIRED"}').encode()
+        self.assertEqual(self.run_gate(FakeChild(reply)), 'ERROR')
 
     def test_the_child_is_the_fixed_script_isolated_and_checked(self):
         fake = FakeChild(decided("DENY"))
@@ -296,14 +322,15 @@ class GateTests(NoRealDialogTestCase):
         # It stops while the window is open, without waiting for an answer.
         self.assertLess(time.monotonic() - started, 2)
 
-    def test_a_timeout_is_expired_not_approved(self):
+    def test_a_parent_timeout_is_error_not_expiry(self):
         def late():
             raise subprocess.TimeoutExpired("x", 1)
-        self.assertEqual(self.run_gate(FakeChild(decided("APPROVE"), communicate=late), seconds=1), "EXPIRED")
+        self.assertEqual(self.run_gate(FakeChild(decided("APPROVE"), communicate=late), seconds=1), "ERROR")
 
-    def test_an_ended_clock_is_expired_even_if_the_child_never_answers(self):
-        fake = FakeChild(decided("APPROVE"), communicate=lambda: time.sleep(0.8))
-        self.assertEqual(self.run_gate(fake, seconds=0.01), "EXPIRED")
+    def test_parent_clock_without_child_reply_is_error(self):
+        # The child answers only after the window budget plus the parent's grace (C8).
+        fake = FakeChild(decided("APPROVE"), communicate=lambda: time.sleep(gate.CHILD_GRACE_SECONDS + 0.5))
+        self.assertEqual(self.run_gate(fake, seconds=0.01), "ERROR")
 
     def test_a_reader_failure_is_an_error(self):
         def broken():
@@ -339,7 +366,7 @@ def valid_frame(**updates):
     return (json.dumps(data) + "\n").encode()
 
 
-def run_child(tk, loop, raw=None):
+def run_child(tk, loop, raw=None, clock=None):
     root = tk.Tk.return_value
     timers = []
     root.after.side_effect = lambda delay, callback: timers.append((delay, callback))
@@ -347,10 +374,15 @@ def run_child(tk, loop, raw=None):
     def button(label):
         return next(c.kwargs["command"] for c in tk.Button.call_args_list if c.kwargs["text"] == label)
     events = SimpleNamespace(button=button, close=lambda: root.protocol.call_args.args[1](),
-                             expire=lambda: next(callback for delay, callback in timers if delay == 9000)())
+                             expire=lambda: next(callback for delay, callback in timers if delay == 9025)())
+    clock = [100.0] if clock is None else clock
+    expire = events.expire
+    events.timer_raw = expire
+    events.expire = lambda: (clock.__setitem__(0, 109.0), expire())[1]
     root.mainloop.side_effect = lambda: loop(events)
     output = io.BytesIO()
-    with patch.dict(sys.modules, {"tkinter": tk}), \
+    with patch.object(child, "monotonic", side_effect=lambda: clock[0]), \
+            patch.dict(sys.modules, {"tkinter": tk}), \
             patch.object(child.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(raw or valid_frame()))), \
             patch.object(child.sys, "stdout", SimpleNamespace(buffer=output)):
         child.main()
@@ -358,6 +390,32 @@ def run_child(tk, loop, raw=None):
 
 
 class ChildTests(NoRealDialogTestCase):
+    def test_c5_event_matrix_first_event_and_monotonic_boundary(self):
+        from itertools import permutations
+        cases = [(at, (event,)) for at in (108, 109, 110) for event in ('close', 'timer', 'approve')]
+        cases += [(at, order) for at in (108, 109, 110)
+                  for order in permutations(('close', 'timer', 'approve'))]
+        cases += [(109, ('reject', 'timer', 'approve')), (108, ('approve', 'reject', 'close'))]
+        for at, order in cases:
+            with self.subTest(at=at, order=order):
+                clock = [100.0]
+                def loop(e):
+                    clock[0] = at
+                    actions = {'close': e.close, 'timer': e.timer_raw,
+                               'approve': e.button('今回だけ承認'), 'reject': e.button('却下')}
+                    for event in order:
+                        actions[event]()
+                first = order[0]
+                invalid = first == 'timer' and at < 109 or first == 'approve' and at >= 109
+                if invalid:
+                    with self.assertRaises(RuntimeError):
+                        run_child(fake_tk(), loop, clock=clock)
+                else:
+                    output, root = run_child(fake_tk(), loop, clock=clock)
+                    expected = {'close': 'CLOSED', 'timer': 'EXPIRED', 'approve': 'APPROVE', 'reject': 'DENY'}[first]
+                    self.assertEqual(json.loads(output), {'nonce': 'f' * 64, 'decision': expected})
+                    self.assertIn(9025, [c.args[0] for c in root.after.call_args_list])
+
     def test_bad_requests_are_refused_before_any_window(self):
         good = frame_data(valid_frame())
         bad = [b"", b"{}\n", b"not-json\n", valid_frame()[:-1], b" " * (child.MAX_REQUEST + 1) + b"\n",
@@ -397,7 +455,7 @@ class ChildTests(NoRealDialogTestCase):
     def test_each_control_gives_its_decision_with_the_nonce(self):
         for name, action, expected in (("approve", lambda e: e.button("今回だけ承認")(), "APPROVE"),
                                        ("reject", lambda e: e.button("却下")(), "DENY"),
-                                       ("close", lambda e: e.close(), "DENY"),
+                                       ("close", lambda e: e.close(), "CLOSED"),
                                        ("timer", lambda e: e.expire(), "EXPIRED")):
             with self.subTest(name=name):
                 output, _ = run_child(fake_tk(), action)

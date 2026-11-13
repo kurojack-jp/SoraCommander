@@ -297,7 +297,7 @@ class ScaffoldTests(unittest.TestCase):
             "list_folder_page", "read_text_page", "find_files", "search_code",
             "path_info", "read_text_lines", "read_many_text_files",
             "compare_text_files", "read_text_chunk", "sha256_file",
-            "preview_source_create", "preview_source_patch", "tool_catalog",
+            "preview_source_create", "preview_source_patch", "tool_catalog", "activity",
                 "create_directory", "create_file", "move_file", "request_source_patch_dev",
                 "list_processes", "get_config", "send_input",
         })

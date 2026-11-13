@@ -159,7 +159,7 @@ class ToolTests(unittest.TestCase):
                          {"name", "wait_seconds", "request_id"})
         self.assertEqual(tools["list_tasks"].parameters.get("properties", {}), {})
         self.assertIn("approval window opens for every run", tools["run_task"].description)
-        self.assertIn("never call run_task again", tools["run_task"].description)
+        self.assertIn("never resubmit, send a new request for it, or ask for the window again", tools["run_task"].description)
         self.assertIn("no approval window", tools["list_tasks"].description)
 
 

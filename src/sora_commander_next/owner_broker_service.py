@@ -12,6 +12,7 @@ import re
 import threading
 
 from .broker_host import MAX_REPLY_BYTES, decode_frame, encode_frame
+from .no_answer import valid_no_answer
 
 _HEX32 = re.compile("[0-9a-f]{32}")
 _HEX48 = re.compile("[0-9a-f]{48}")
@@ -25,6 +26,7 @@ _NONE = frozenset()
 
 # action: (required fields, optional fields)
 _SCHEMAS = {
+    "activity": (frozenset({"mode"}), frozenset({"id", "limit"})),
     "run_command": (_COMMAND_REQUIRED | {"background"}, _COMMAND_OPTIONAL),
     "run_command_wait": (_COMMAND_REQUIRED, _COMMAND_OPTIONAL | _WAIT),
     "await_command_result": (frozenset({"pending_id"}), _WAIT),
@@ -126,8 +128,17 @@ class OwnerBrokerService:
         required, optional = schema
         names = set(arguments)
         if not required <= names or not names <= required | optional:
+            if action == "activity":
+                from .activity import reply as activity_reply
+                return activity_reply(status="ERROR", error="InvalidArguments", action="CORRECT_READ_ARGUMENTS")
             return {"status": "DENIED", "error": "InvalidBrokerArguments"}
-        if not _valid_fields(arguments):
+        if action == "activity":
+            from .activity import arguments as activity_arguments, reply as activity_reply
+            try:
+                activity_arguments(arguments)
+            except (ValueError, TypeError):
+                return activity_reply(status="ERROR", error="InvalidArguments", action="CORRECT_READ_ARGUMENTS")
+        elif not _valid_fields(arguments):
             return {"status": "DENIED", "error": "InvalidBrokerArguments"}
         # A repeated frame is never a second backend call, even across pipe workers.
         # The backend runs outside this lock, because it can wait on an Owner window.
@@ -139,6 +150,13 @@ class OwnerBrokerService:
             self._seen_calls.add(call_id)
         try:
             result = getattr(self._backend, action)(**arguments)
+            if action == "activity":
+                from .activity import validate_reply, reply as activity_reply
+                try:
+                    return validate_reply(result, arguments["mode"], arguments.get("id"))
+                except Exception:
+                    return activity_reply(arguments["mode"], arguments.get("id"),
+                                          status="ERROR", error="InvalidMetadata")
         except Exception:
             # No exception text: it may hold paths or command content.
             return self._unknown(arguments, "BrokerBackendFailed")
@@ -149,6 +167,11 @@ class OwnerBrokerService:
             return {"status": "OK", **result}
         if type(result) is not dict or type(result.get("status")) is not str:
             return self._unknown(arguments, "BrokerBackendReplyInvalid")
+        if result["status"] == "TIMED_OUT":
+            if (not valid_no_answer(result)
+                    or any(key in arguments and key in result and result[key] != arguments[key]
+                           for key in ("pending_id", "request_id"))):
+                return self._unknown(arguments, "BrokerBackendReplyInvalid")
         return result
 
     @staticmethod

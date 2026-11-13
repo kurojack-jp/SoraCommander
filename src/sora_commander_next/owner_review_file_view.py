@@ -8,11 +8,12 @@ from dataclasses import dataclass
 import re
 from .file_edits import escape_review_display
 
-_CAUTION = ("Inspect the ENTIRE proposal. Close or Reject intentionally declines. "
-            "Unanswered expiry is not an Owner rejection.")
-_INFORMATION = ("Neither Close/Reject nor unanswered expiry authorizes file changes. "
-                "Candidate wording only: current Host/MCP file results do not yet "
-                "distinguish expiry from rejection.")
+# Same text as the active pilot window (i18n key pilot_file_caution): Owner
+# decision 2026-11-12, closing the window is "no answer", not a reject.
+_CAUTION = ("Inspect the ENTIRE proposal. Reject declines. "
+            "Closing the window or not answering in time ends the review without a decision; no file is changed.")
+_INFORMATION = ("Close and unanswered expiry are not Owner rejection. "
+                "No file is changed; the result is reported as no decision (TIMED_OUT).")
 
 
 def _nonempty_text(value, label):

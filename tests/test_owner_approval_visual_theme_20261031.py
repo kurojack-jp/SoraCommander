@@ -267,7 +267,7 @@ class ApprovalVisualTests(unittest.TestCase):
                         elif action == 'timeout':
                             # The expiry timer carries the remaining 45s budget.
                             delay, cb = max(timers, key=lambda timer: timer[0])
-                            self.assertTrue(44000 < delay <= 45000, delay)
+                            self.assertTrue(44000 < delay <= 45025, delay)  # 25 ms past the deadline
                             cb()
                         else:
                             next(c.kwargs['command'] for c in tk.Button.call_args_list

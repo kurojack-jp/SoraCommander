@@ -23,7 +23,7 @@ class LiveCatalogTests(unittest.TestCase):
         try:
             server=build_server(host)
             names=sorted(tool.name for tool in server._tool_manager.list_tools())
-            self.assertEqual(len(names),47)
+            self.assertEqual(len(names),48)
             _,data=asyncio.run(server.call_tool("tool_catalog",{}))
             _,status=asyncio.run(server.call_tool("status",{}))
             self.assertEqual(data["registered_tool_count"],len(names))

@@ -1,7 +1,7 @@
-"""Localized Owner command approval child. NOT ACTIVE: no broker launches it yet.
+"""Localized Owner command approval child used by the command broker.
 
-Same private stdin/stdout role and APPROVE/DENY/EXPIRED reply as the active
-owner_approval_dialog.py, plus a locale chosen once by the broker. The request
+Private stdin/stdout and nonce-bound APPROVE/DENY/EXPIRED/CLOSED replies,
+with a locale chosen once by the broker. The request
 cannot name a locale source. Language and the caution indicator change display
 text only; neither reaches the reply, a callback or a button state.
 Owner identity, nonce checks, session lock and launch stay in the broker.
@@ -9,6 +9,7 @@ Owner identity, nonce checks, session lock and launch stay in the broker.
 import json
 import re
 import sys
+from time import monotonic
 
 _FIELDS = frozenset({"nonce", "executable", "argv", "cwd", "seconds", "pending_id",
                      "timeout", "output_limit", "locale"})
@@ -245,6 +246,10 @@ def render_checked(tk, root, theme, renderer, screen, labels, *, locale, reject,
 
 def main():
     request = parse_request(sys.stdin.buffer.readline(131073))
+    # The review clock starts when the request arrives, not when the window
+    # is drawn: the parent's wait is measured from the same moment, and a
+    # clock started later would let the parent give up before this timer.
+    deadline = monotonic() + request["seconds"]
     theme = _load_sibling("approval_visual_theme.py")
     renderer = _load_sibling("owner_review_renderer.py")
     screen, labels = build_screen(
@@ -258,13 +263,23 @@ def main():
         # Tk callbacks run serially; the first event owns the decision.
         if selected["decision"] is not None:
             return
+        if value == "APPROVE" and monotonic() >= deadline:
+            value = "ERROR"
         selected["decision"] = value
         root.destroy()
 
+    def expire():
+        if selected["decision"] is not None:
+            return
+        # Elapsed time alone is not evidence of an unanswered review.
+        decide("EXPIRED" if monotonic() >= deadline else "ERROR")
+
     render_checked(tk, root, theme, renderer, screen, labels, locale=request["locale"],
                    reject=lambda: decide("DENY"), approve=lambda: decide("APPROVE"))
-    root.protocol("WM_DELETE_WINDOW", lambda: decide("DENY"))
-    root.after(int(request["seconds"] * 1000), lambda: decide("EXPIRED"))
+    root.protocol("WM_DELETE_WINDOW", lambda: decide("CLOSED"))
+    # Tk timers count whole milliseconds on their own clock. Schedule a little
+    # past the deadline so a true expiry is never misread as an early timer.
+    root.after(max(0, int((deadline - monotonic()) * 1000)) + 25, expire)
     root.attributes("-alpha", 1.0)
     # Non-blocking Windows system alert when the Owner review appears.
     # Audio failure must never approve, deny, or change the expiry clock.
@@ -279,7 +294,7 @@ def main():
                 pass
     root.after(100, alert_review)
     root.mainloop()
-    if selected["decision"] is None:
+    if selected["decision"] in (None, "ERROR"):
         raise RuntimeError("Owner review ended without a decision or timer expiry")
     result = {"nonce": request["nonce"], "decision": selected["decision"]}
     sys.stdout.buffer.write(json.dumps(result).encode("ascii") + b"\n")

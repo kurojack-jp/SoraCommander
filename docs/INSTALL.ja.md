@@ -120,11 +120,13 @@ Windowsにサインインしたままにしてください。画面がロック�
 
 利用条件、ワークスペースの権限、接続方法は、OpenAI公式ヘルプの最新の[Connecting custom MCP servers in ChatGPT](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)（[日本語](https://help.openai.com/ja-jp/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)）に従ってください。案内に従って自分のSecure MCP Tunnelを使います。画面名や手順は変わることがあります。接続後、新しいチャットで`ping`、`status`、`list_sessions`、`tool_catalog`を依頼してください。
 
-期待する状態は、`status`の`remote_ready: false`、`approval: LOCAL_DEMO_ONLY`です。任意の編集・作成pilot付きDEV構成では53ツールですが、表示数はHost構成によります。
+期待する状態は、`status`の`remote_ready: false`、`approval: LOCAL_DEMO_ONLY`です。任意の編集・作成pilot付きDEV構成では54ツールですが、表示数はHost構成によります。
 
 ChatGPTのファイル操作ツールは、設定した許可フォルダに届きます。設定ファイルがなければcheckoutだけです。**承認したコマンドは本人のWindows権限で動き、そのアカウントでできる操作を実行できます。**
 
 ## 問題が起きたとき
+
+ChatGPTが承認は未決定で終わったと伝えた場合、何も実行されていません。準備ができたら改めて依頼してください。
 
 `.venv\Scripts\python.exe tools\scn_doctor.py`で、修正先の案内付きの読取り専用セットアップ確認を実行できます。
 何も起動せず、トンネルのキーやYAMLの内容も読みません。`--lang en`または`--lang ja`で承認窓の言語設定を上書きできます。
@@ -159,7 +161,7 @@ $env:PYTHONPATH = "src"
 
 ## v0.1.5の追加ツール（任意）
 
-任意の編集・作成pilot付きDEV構成では53ツールです。表示数はHost構成によります。開発者向けプレビューの制限は継続します。
+v0.1.5の時点で、任意の編集・作成pilot付きDEV構成は53ツールでした（v0.1.7から54ツール）。表示数はHost構成によります。開発者向けプレビューの制限は継続します。
 `remote_ready=false`、`LOCAL_DEMO_ONLY`で、本番・公開の安全ゲートはHOLDです。
 
 ### 読取り専用Git
@@ -225,6 +227,28 @@ Ownerが`%USERPROFILE%\.config\sora-commander\ogf-bridge.json`を作らなけれ
 読み取ります。承認の引数やコマンド出力には含めません。`PENDING`や観測待ちのtimeout後は
 元の`pending_id`を`await_command_result`で観測します。拒否・期限切れ・結果不明の操作を
 再送しないでください。結果不明の場合はOwnerによる照合が必要です。
+
+## activity（v0.1.7）
+
+`activity()`で最近の操作、`activity(mode="lookup", id="<種類を明記したID>")`でIDを確認します。承認窓は出ず、ID・状態・時刻だけを表示します。種類を明記したIDを、返された読取りツールで観測してください。`UNKNOWN`は今回の実行で利用可能な情報にIDがないという意味で、未実行の証拠ではありません。再送や代替IDの生成はせず、不確実な結果を報告し、手動確認を待ってください。
+
+メモリ内の保持窓は512操作・1時間で、Brokerの再起動で失われます。更新後はBrokerとクライアントの両方を再起動し、ChatGPTのツールを再読み込みしてください。
+
+## 承認が未決定で終わったとき（v0.1.7）
+
+2026-11-13にBrokerモードでChatGPTを通じた実際の窓を確認しました。確認済みはコマンド窓（Approve、Reject、X、無回答）と`create_file`（X、Approve）です。他の経路はテストでは同じ動作ですが、実際の窓では未確認です。未確認の範囲は`create_file`と他のDEVファイルツールの無回答、DEV `send_input`、対話型の2つ目の窓、テキスト編集・作成pilot、`run_task`、`ogf_cue`です。このDEV確認は本番受入を意味しません。
+
+| Ownerの操作 | ChatGPTが受け取る結果 | 意味 |
+|---|---|---|
+| Rejectを押した | `DENIED` | Ownerが却下した |
+| Xで窓を閉じた | `TIMED_OUT`, `reason=CLOSED` | 未決定。何も実行・書込みされていない |
+| 時間内に回答しなかった | `TIMED_OUT`, `reason=EXPIRED` | 未決定。何も実行・書込みされていない |
+
+**Xの意味が変わりました。** 以前のバージョンでは窓を閉じると却下扱いでした。今後は未決定で承認を終了します。無回答は拒否ではなく、Ownerが離席していた証拠でもありません。45秒と60秒の制限時間は変わりません。
+
+回答を確認できなかった場合、`ERROR`と`NOT_STARTED`は何も始まっていないことを意味します。実行・書込みの有無が分からない`OUTCOME_UNKNOWN` / `UNKNOWN`は手動確認が必要です。書込み検証エラーを含め、`NOT_STARTED`が証明されていない`ERROR`も手動確認が必要です。これらと表の3つの終了すべてについて、ChatGPTは報告してOwnerの次の指示を待ちます（`REPORT_AND_WAIT`）。再送、同じ操作の新規リクエスト、窓の再表示の要求は禁止です。新規リクエストにはOwnerの新しい明示指示が必要です。`OwnerReviewUnavailable`は窓が表示されず何も実行されなかったことを意味します。報告して待ち、Ownerの明示指示がある場合だけ新規リクエストを送ります。
+
+対象はコマンドの窓（`run_command*`, `run_task`, `ogf_cue`）、DEVファイルツール（`create_directory`, `create_file`, `move_file`, `request_source_patch_dev`）、DEVの`send_input`と対話実行の2番目の窓、有効にした場合のテキスト編集・作成pilotです。コマンドは`launch_outcome=NOT_STARTED`、ファイル・入力は今回の操作の`write_outcome=NOT_STARTED`を使い、既存プロセスが起動していないという意味ではありません。例外として、対話実行の`SECOND_GUI`でRejectすると、従来どおり`ERROR/OwnerAuthorizationRequired`と`launch_outcome=NOT_STARTED`を返します。報告して待ちます。Brokerの入力は引き続き`DENY/DevInteractiveOnly`です。`PENDING`は観測待ちだけを意味し、同じIDを既存のstatus/waitツールで観測します。終端の`TIMED_OUT`とは異なります。
 
 ## テストを実行する
 

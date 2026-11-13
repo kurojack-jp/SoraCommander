@@ -1,13 +1,14 @@
-"""Localized Owner file approval child. NOT ACTIVE: nothing connected launches it yet.
+"""Localized Owner file approval child for DEV file operations.
 
 Private stdin/stdout only. It draws one prepared screen with the command window's
-checked drawing and returns APPROVE, DENY or EXPIRED bound to the nonce. It holds
+checked drawing and returns APPROVE, DENY, CLOSED or EXPIRED bound to the nonce. It holds
 no file path to act on, writes nothing and decides nothing else. The parent owns
 Owner identity, session checks, the proposal and the write.
 """
 import json
 import re
 import sys
+from time import monotonic
 
 MAX_REQUEST = 1048576
 _FIELDS = frozenset({"nonce", "seconds", "locale", "kind", "title", "heading", "caution",
@@ -68,6 +69,10 @@ def _load_command_window():
 
 def main():
     request = parse_request(sys.stdin.buffer.readline(MAX_REQUEST + 1))
+    # The review clock starts when the request arrives, not when the window
+    # is drawn: the parent's wait is measured from the same moment, and a
+    # clock started later would let the parent give up before this timer.
+    deadline = monotonic() + request["seconds"]
     drawing = _load_command_window()
     theme = drawing._load_sibling("approval_visual_theme.py")
     renderer = drawing._load_sibling("owner_review_renderer.py")
@@ -83,13 +88,22 @@ def main():
         # Tk callbacks run serially; the first event owns the decision.
         if selected["decision"] is not None:
             return
+        if value == "APPROVE" and monotonic() >= deadline:
+            value = "ERROR"
         selected["decision"] = value
         root.destroy()
 
+    def expire():
+        if selected["decision"] is not None:
+            return
+        decide("EXPIRED" if monotonic() >= deadline else "ERROR")
+
     drawing.render_checked(tk, root, theme, renderer, screen, labels, locale=request["locale"],
                            reject=lambda: decide("DENY"), approve=lambda: decide("APPROVE"))
-    root.protocol("WM_DELETE_WINDOW", lambda: decide("DENY"))
-    root.after(int(request["seconds"] * 1000), lambda: decide("EXPIRED"))
+    root.protocol("WM_DELETE_WINDOW", lambda: decide("CLOSED"))
+    # Tk timers count whole milliseconds on their own clock. Schedule a little
+    # past the deadline so a true expiry is never misread as an early timer.
+    root.after(max(0, int((deadline - monotonic()) * 1000)) + 25, expire)
     root.attributes("-alpha", 1.0)
 
     # Audio failure must never approve, deny, or change the expiry clock.
@@ -104,7 +118,7 @@ def main():
                 pass
     root.after(100, alert_review)
     root.mainloop()
-    if selected["decision"] is None:
+    if selected["decision"] in (None, "ERROR"):
         raise RuntimeError("Owner review ended without a decision or timer expiry")
     result = {"nonce": request["nonce"], "decision": selected["decision"]}
     sys.stdout.buffer.write(json.dumps(result).encode("ascii") + b"\n")

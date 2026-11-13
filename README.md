@@ -19,6 +19,8 @@ after changing it.
 
 **It saves the usage of your other tools.** The ChatGPT chat you already use does the reading, running and checking, so that work does not use up the limits of a separate coding agent. ChatGPT's own message limits still apply.
 
+It also works in an ordinary chat in Instant mode — no separate app or mode to switch into. From December, ChatGPT and Codex share usage quotas on Plus/Pro/Business plans, but OpenAI says chat in Instant mode does not consume quota, so working here does not draw on your Work quota. That statement covers chat, not tool calls, so it is not a promise that every tool call is free.
+
 Sora Commander is an MCP server for Windows. It connects to ChatGPT through OpenAI's Secure MCP Tunnel. Commands that are not plainly safe open an approval window on your PC, and they run only if you approve them. **So you need to be at the PC to approve them.** Reading files and checking results need no window.
 
 > **v0.1 developer preview. Not accepted for production use.**
@@ -34,6 +36,12 @@ Sora Commander is an MCP server for Windows. It connects to ChatGPT through Open
 - Opens a local approval window for commands and edits. There is no remote approval
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
+
+## New in v0.1.7
+
+- Approval windows now distinguish Reject (`DENIED`) from no decision: X gives `TIMED_OUT`, `reason=CLOSED`; no answer in time gives `TIMED_OUT`, `reason=EXPIRED`. **X changed meaning: before this version, closing the window counted as a reject.** No decision means nothing ran or was written; ChatGPT reports and waits for your next instruction, without resubmitting or asking for the window again. A no-answer result is not a refusal or proof that you were away. Time limits are unchanged. Live-checked on 2026-11-13 with real windows through ChatGPT in Broker mode: command windows (Approve, Reject, X, no answer) and `create_file` (X, Approve). Other paths behave the same way in tests but have not been checked with real windows: no answer for `create_file` and the other DEV file tools, DEV `send_input`, the interactive second window, the text edit/create pilot, `run_task` and `ogf_cue`. These DEV checks do not establish production acceptance. See the INSTALL guide for scope and uncertain outcomes.
+- `activity` answers which operations and IDs are known in the current run, without an approval window. It shows only IDs, states and times.
+- **After updating, restart the Broker and its client, then refresh the tools in ChatGPT.** The DEV tool list with the optional edit/create pilot grew to 54 tools, and the tool help changed; the visible count depends on the Host configuration.
 
 ## New in v0.1.5
 
@@ -126,6 +134,8 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 
 **他のツールの使用量を節約できます。** 読む、実行する、確かめるといった作業を、普段使っている ChatGPT のチャットが受け持つので、別のコーディング AI の使用量の上限を使わずに済みます。ChatGPT 自体のメッセージの上限はあります。
 
+いつものチャット（Instant モードを含む）でそのまま使えます。12月から Plus/Pro/Business では ChatGPT と Codex で利用枠が共有されますが、OpenAI によれば Instant モードのチャットは枠を消費しないため、こちらの作業で Work の枠を使わずに済みます。ただしこの説明はチャットについてのもので、ツール呼び出しの扱いまでは書かれていないので、無料を断定するものではありません。
+
 OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サーバーです。安全と言い切れないコマンドは PC の画面に承認窓を出して、承認したときだけ実行します。**承認するときは PC の前にいる必要があります。** ファイルを読むことや結果の確認には、窓は出ません。
 
 許可フォルダの中の対応するテキストファイルを、承認窓で提案された内容を確認して承認した後に、ChatGPT が作成・編集できます。
@@ -144,6 +154,12 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+## v0.1.7 の新機能
+
+- 承認窓でReject（`DENIED`）と未決定を区別します。Xは`TIMED_OUT`, `reason=CLOSED`、時間内の無回答は`TIMED_OUT`, `reason=EXPIRED`です。**Xの意味が変わり、以前のバージョンの「閉じると却下」から未決定になりました。** 未決定なら何も実行・書込みされず、ChatGPTは再送や窓の再表示を要求せず、報告して次の指示を待ちます。無回答は拒否でも離席の証拠でもありません。制限時間は変わりません。2026-11-13にBrokerモードでChatGPTを通じた実際の窓を確認しました。確認済みはコマンド窓（Approve、Reject、X、無回答）と`create_file`（X、Approve）です。他の経路はテストでは同じ動作ですが、実際の窓では未確認です。未確認の範囲は`create_file`と他のDEVファイルツールの無回答、DEV `send_input`、対話型の2つ目の窓、テキスト編集・作成pilot、`run_task`、`ogf_cue`です。このDEV確認は本番受入を意味しません。対象範囲と結果不明の場合は導入手順を参照してください。
+- `activity`は現在の実行で分かっている操作とIDを承認窓なしで確認し、ID・状態・時刻だけを表示します。
+- **更新後はBrokerとそのクライアントを再起動し、その後ChatGPTのツールを再読み込みしてください。** 任意の編集・作成pilot付きDEV構成のツール一覧は54ツールに増え、ツールヘルプも変わりました。表示数はHost構成によります。
 
 v0.1.5の任意の編集・作成pilot付きDEV構成では53ツールです。表示数はHost構成によります。`git_snapshot`（状態）、`git_diff`（差分）、
 `git_log`（履歴）、`git_show`（コミットや過去のファイル）、`git_remote_check`

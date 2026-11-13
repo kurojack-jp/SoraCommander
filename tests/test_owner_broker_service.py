@@ -65,6 +65,7 @@ class OwnerBrokerServiceTests(unittest.TestCase):
 
     def test_every_host_action_reaches_the_backend_once(self):
         calls = [
+            ("activity", self.host.activity),
             ("run_command", lambda: self.host.run_command(
                 executable=EXE, argv=["x"], cwd=CWD, request_id=RID)),
             ("run_command_wait", lambda: self.host.run_command_wait(
@@ -98,6 +99,11 @@ class OwnerBrokerServiceTests(unittest.TestCase):
         for name, call in calls:
             with self.subTest(name=name):
                 self.backend.calls.clear()
+                if name == "activity":
+                    from sora_commander_next.activity import reply
+                    self.backend.result = reply("recent", action="CHOOSE_LABELLED_ID")
+                else:
+                    self.backend.result = {"status": "OK"}
                 self.assertEqual(call()["status"], "OK")
                 self.assertEqual([item[0] for item in self.backend.calls], [name])
 
@@ -300,7 +306,10 @@ class OwnerBrokerServiceTests(unittest.TestCase):
                 imported.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
                 imported.add((node.module or "").split(".")[0])
-        self.assertEqual(imported, {"math", "re", "threading", "broker_host"})
+        self.assertEqual(imported, {"math", "re", "threading", "broker_host", "activity", "no_answer"})
+        # The added dependency must itself stay entirely data-only.
+        pure = ast.parse((path.parent / "no_answer.py").read_text(encoding="utf-8"))
+        self.assertFalse(any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(pure)))
 
     def test_actions_exclude_interactive_and_source_writes(self):
         fields = set().union(*(required | optional for required, optional in _SCHEMAS.values()))

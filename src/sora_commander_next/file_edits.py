@@ -1,5 +1,6 @@
 """Bounded local text CAS draft. NOT safe for remote activation or hostile writers."""
 from hashlib import sha256
+from .file_review_outcome import _VerifiedFileReviewExpiry
 from dataclasses import dataclass
 from math import ceil, isfinite
 import difflib
@@ -175,7 +176,7 @@ class _FileReviewDecision:
             decision, reason = 'UNAVAILABLE', 'EARLY_TIMER'
         self.result = _DevFileReviewOutcome(
             decision, reason, self.deadline,
-            monotonic() if decision == 'EXPIRED' else None, self.review_token)
+            monotonic() if decision in {'EXPIRED', 'CLOSED'} else None, self.review_token)
         self.root.quit()
 
     def check_session(self):
@@ -203,17 +204,6 @@ class _FileReviewDecision:
         return self.result
 
 
-@dataclass(frozen=True)
-class _VerifiedFileReviewExpiry:
-    """Local invocation-bound proof emitted only before either writer is entered."""
-    review_token: object
-    path: str
-    old_sha256: str | None
-    new_sha256: str
-    operation: str
-    write_outcome: str = 'NOT_STARTED'
-
-
 def _dev_file_review_stop(observed, guard, deadline, token, path, old, new, op):
     # UI return and final Owner verification precede *all* write admission.
     error = {'status': 'ERROR', 'error': 'ReviewUnavailable',
@@ -224,13 +214,16 @@ def _dev_file_review_stop(observed, guard, deadline, token, path, old, new, op):
         return error
     if type(observed) is not _DevFileReviewOutcome:
         return error
-    if observed.decision == 'EXPIRED':
+    if observed.decision in {'EXPIRED', 'CLOSED'}:
         at = observed.timer_at
         if (observed.reason != 'LOCAL_EVENT' or observed.review_token is not token
                 or observed.deadline != deadline or type(at) not in (int, float)
-                or not isfinite(at) or not deadline <= at <= monotonic()):
+                or type(deadline) not in (int, float) or not isfinite(deadline)
+                or not isfinite(at) or at > monotonic()
+                or (observed.decision == 'EXPIRED' and at < deadline)):
             return error
-        return _VerifiedFileReviewExpiry(token, path, old, new, op)
+        return _VerifiedFileReviewExpiry(token, path, old, new, op,
+            reason=observed.decision, deadline=deadline, timer_at=at)
     if observed.decision == 'REJECT':
         return {'status': 'DENIED'}
     if (observed.decision != 'APPROVED' or monotonic() >= deadline
@@ -240,27 +233,27 @@ def _dev_file_review_stop(observed, guard, deadline, token, path, old, new, op):
 
 
 def review_and_create_timeout_dev(path, roots, content, expected_sha256, *, review_token,
-                                  verify_binding=None):
-    """Synthetic DEV pilot only. Same single review; no reusable grant."""
+                                  verify_binding=None, locale="en"):
+    """Local DEV pilot only. Same single review; no reusable grant."""
     if type(review_token) is not object:
         raise ValueError('local invocation token required')
     return review_and_create_local(path, roots, content, expected_sha256,
                                    _dev_timeout_token=review_token,
-                                   _dev_verify_binding=verify_binding)
+                                   _dev_verify_binding=verify_binding, locale=locale)
 
 
 def review_and_replace_timeout_dev(path, roots, content, expected_sha256, *, review_token,
-                                   verify_binding=None):
-    """Synthetic DEV pilot only. Legacy callers retain their exact result shapes."""
+                                   verify_binding=None, locale="en"):
+    """Local DEV pilot only. Legacy callers retain their exact result shapes."""
     if type(review_token) is not object:
         raise ValueError('local invocation token required')
     return review_and_replace_local(path, roots, content, expected_sha256,
                                     _dev_timeout_token=review_token,
-                                    _dev_verify_binding=verify_binding)
+                                    _dev_verify_binding=verify_binding, locale=locale)
 
 
 def _render_create_review(preview, expected_sha256, *, deadline, verify=None,
-                          _review_token=None):
+                          _review_token=None, locale="en"):
     """One existing CREATE window; caller owns validation and write admission."""
     import tkinter as tk
     from . import approval_visual_theme as theme
@@ -270,15 +263,17 @@ def _render_create_review(preview, expected_sha256, *, deadline, verify=None,
         root.title('Sora Commander Next - LOCAL file creation review')
         theme.window(root)
         card = theme.header(tk, root, 'LOCAL file create — Review complete JSON-escaped UTF-8 text.')
-        theme.notice(tk, card, 'Inspect the ENTIRE proposal. Close or Reject intentionally declines. Unanswered expiry is not an Owner rejection.', caution=True)
-        theme.notice(tk, card, 'Neither Close/Reject nor unanswered expiry authorizes file changes. Existing public/Host/MCP file results may report DENIED for either; TIMED_OUT is not published.')
+        from .owner_review_i18n import load_catalog
+        words = load_catalog(locale)
+        theme.notice(tk, card, words['pilot_file_caution'], caution=True)
+        theme.notice(tk, card, words['pilot_file_information'])
         pane = theme.viewer(tk, card)
         pane.insert('1.0', f"{escape_review_display(preview['path'])}\n{preview['bytes']} bytes\nSHA-256: {expected_sha256}\n\n" + preview['review'])
         pane.config(state='disabled')
         theme.review_actions(tk, card, lambda: selected.decide('REJECT'),
                              lambda: selected.decide('APPROVED'))
-        root.protocol('WM_DELETE_WINDOW', lambda: selected.decide('REJECT'))
-        root.after(max(0, ceil((deadline - monotonic()) * 1000)),
+        root.protocol('WM_DELETE_WINDOW', lambda: selected.decide('CLOSED'))
+        root.after(max(0, ceil((deadline - monotonic()) * 1000) + 25),
                    lambda: selected.decide('EXPIRED'))
         if verify is not None:
             root.after(0, selected.check_session)
@@ -301,7 +296,7 @@ def _render_create_review(preview, expected_sha256, *, deadline, verify=None,
 
 
 def _show_create_review_dev(preview, expected_sha256, *, deadline=None, verify=None,
-                            _review_token=None):
+                            _review_token=None, locale="en"):
     """Opt-in DEV observation of one CREATE UI, no path admission or writes.
 
     Trusted local callers only, never registered as an MCP/Host capability.
@@ -312,13 +307,13 @@ def _show_create_review_dev(preview, expected_sha256, *, deadline=None, verify=N
     try:
         return _render_create_review(preview, expected_sha256,
                                      deadline=deadline, verify=verify,
-                                     _review_token=_review_token)
+                                     _review_token=_review_token, locale=locale)
     except Exception:
         return _DevFileReviewOutcome('ERROR', 'UI_ERROR')
 
 
 def review_and_create_local(path, roots, content, expected_sha256, *,
-                            _dev_timeout_token=None, _dev_verify_binding=None):
+                            _dev_timeout_token=None, _dev_verify_binding=None, locale="en"):
     """One bounded Owner-session approval for one absent disposable file."""
     from .windows_owner import OwnerSessionGuard
     guard = OwnerSessionGuard()
@@ -330,7 +325,7 @@ def review_and_create_local(path, roots, content, expected_sha256, *,
     if _dev_timeout_token is not None:
         observed = _show_create_review_dev(
             preview, expected_sha256, deadline=deadline, verify=guard.verify,
-            _review_token=_dev_timeout_token)
+            _review_token=_dev_timeout_token, locale=locale)
         stopped = _dev_file_review_stop(observed, guard, deadline,
             _dev_timeout_token, path, None, expected_sha256, 'create')
         if stopped is not None:
@@ -463,7 +458,7 @@ def preview_text_edit(path, roots, content, expected_sha256):
 
 
 def review_and_replace_local(path, roots, content, expected_sha256, *,
-                             _dev_timeout_token=None, _dev_verify_binding=None):
+                             _dev_timeout_token=None, _dev_verify_binding=None, locale="en"):
     """Interactive Windows OWNER-SESSION dev pilot only; never an MCP tool.
 
     In-process UI is NOT a protected security boundary against same-user code.
@@ -484,7 +479,7 @@ def review_and_replace_local(path, roots, content, expected_sha256, *,
     deadline = monotonic() + 45
     if _dev_timeout_token is not None:
         observed = _show_edit_review_dev(preview, deadline=deadline,
-            verify=guard.verify, _review_token=_dev_timeout_token)
+            verify=guard.verify, _review_token=_dev_timeout_token, locale=locale)
         stopped = _dev_file_review_stop(observed, guard, deadline,
             _dev_timeout_token, path, expected_sha256, preview['new_sha256'], 'edit')
         if stopped is not None:
@@ -522,7 +517,7 @@ def _show_edit_review(preview, *, complete_review=None, deadline=None,
                       title='LOCAL file edit review',
                       wording='One-time local file edit. Inspect the complete diff.',
                       verify=None):
-    """Legacy exact bool API, including DEV RDC/interactive consumers."""
+    """Legacy exact bool API; C4 interactive consumers use the typed sibling."""
     observed = _render_edit_review(
         preview, complete_review=complete_review, deadline=deadline,
         title=title, wording=wording, verify=verify)
@@ -544,7 +539,8 @@ def _show_edit_review_dev(preview, **options):
 def _render_edit_review(preview, *, complete_review=None, deadline=None,
                         title='LOCAL file edit review',
                         wording='One-time local file edit. Inspect the complete diff.',
-                        verify=None, _review_token=None):
+                        verify=None, _review_token=None, locale="en",
+                        _notice_keys=("pilot_file_caution", "pilot_file_information")):
     """Shared local GUI only. No write or reusable approval is returned remotely."""
     # Tk timers can run late: bind the default budget before GUI setup and
     # check the monotonic deadline again after the event loop returns.
@@ -557,8 +553,10 @@ def _render_edit_review(preview, *, complete_review=None, deadline=None,
         root.title('Sora Commander Next - ' + title)
         theme.window(root)
         card = theme.header(tk, root, title + ' — ' + wording)
-        theme.notice(tk, card, 'Inspect the ENTIRE proposal. Close or Reject intentionally declines. Unanswered expiry is not an Owner rejection.', caution=True)
-        theme.notice(tk, card, 'Neither Close/Reject nor unanswered expiry authorizes file changes. Existing public/Host/MCP file results may report DENIED for either; TIMED_OUT is not published.')
+        from .owner_review_i18n import load_catalog
+        words = load_catalog(locale)
+        theme.notice(tk, card, words[_notice_keys[0]], caution=True)
+        theme.notice(tk, card, words[_notice_keys[1]])
         pane = theme.viewer(tk, card)
         pane.insert('1.0', escape_review_display(preview['path']) + '\n\n')
         pane.insert('end', escape_review_display(
@@ -567,8 +565,8 @@ def _render_edit_review(preview, *, complete_review=None, deadline=None,
         selected = _FileReviewDecision(root, deadline, verify, _review_token)
         theme.review_actions(tk, card, lambda: selected.decide('REJECT'),
                              lambda: selected.decide('APPROVED'))
-        root.protocol('WM_DELETE_WINDOW', lambda: selected.decide('REJECT'))
-        remaining = max(0, ceil((deadline - monotonic()) * 1000))
+        root.protocol('WM_DELETE_WINDOW', lambda: selected.decide('CLOSED'))
+        remaining = max(0, ceil((deadline - monotonic()) * 1000) + 25)
         root.after(remaining, lambda: selected.decide('EXPIRED'))
         if verify is not None:
             root.after(0, selected.check_session)

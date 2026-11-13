@@ -578,6 +578,9 @@ class JobManager:
                     phase = "resuming"
                     tree.attach_and_resume(child)
                     phase = "resumed"
+                from .activity import publish
+                publish(getattr(self, "_activity_store", None), request_id=request.request_id,
+                        session_id=job.session_id, state="RUNNING", job_state="RUNNING", source="job")
                 job.thread.start()
                 phase = "supervised"
                 self._request_sessions[request.request_id] = job.session_id
@@ -718,6 +721,9 @@ class JobManager:
                 job.status, job.exit_code = state, code
                 job.finished_at = self.clock()
                 job.done.set()
+            from .activity import publish
+            publish(getattr(self, "_activity_store", None), request_id=job.request.request_id,
+                    session_id=job.session_id, state=state, job_state=state, source="job")
             if self.output_archive_path is not None:
                 try:
                     # Persist final status/exit only when actually observed.
@@ -771,6 +777,52 @@ class JobManager:
                     return job.child.poll() is not None
                 except OSError:
                     return False
+
+    def activity_snapshot(self, identities):
+        """Bounded scalar-only copy. No prune, process poll, output or archive."""
+        from .activity import Record, valid_id
+        with self._lock:
+            if (len(self._retired_request_ids) > 65536 or len(self._retired_sessions) > 65536
+                    or len(self._uncertain_request_ids) > 65536 or len(self._jobs) > 256
+                    or len(self._request_sessions) > 65536 or len(self._dev_interactive_requests) > 65536
+                    or len(self._stdin_pending) > 1024 or len(self._stdin_attempts) > 1024):
+                raise ValueError("activity source bound")
+            live = tuple((sid, job, job.request.request_id) for sid, job in self._jobs.items()
+                         if sid in identities or job.request.request_id in identities)
+            retired_ids = self._retired_request_ids | self._uncertain_request_ids.keys() | self._retired_sessions.keys()
+            if len(retired_ids) > 65536:
+                raise ValueError("activity retired source bound")
+            retired = tuple((rid, self._retired_sessions.get(rid))
+                            for rid in retired_ids
+                            if rid in identities or self._retired_sessions.get(rid) in identities)
+            # Membership is authoritative even when correlation has no job row.
+            missing = tuple((rid, sid) for rid, sid in self._request_sessions.items()
+                            if sid not in self._jobs and rid not in retired_ids
+                            and (rid in identities or sid in identities))
+            missing += tuple((rid, None) for rid in self._dev_interactive_requests
+                             if rid in identities and rid not in self._request_sessions
+                             and rid not in retired_ids)
+            inputs = tuple((pid, value["result"].get("status"))
+                           for pid, value in self._stdin_pending.items() if pid in identities)
+            inputs += tuple((pid, "OUTCOME_UNKNOWN") for pid in set(self._stdin_attempts.values())
+                            if pid in identities and pid not in self._stdin_pending)
+        rows = []
+        for sid, job, rid in live:
+            if not valid_id(rid, 32):
+                rid = None
+            with job.lock:
+                state = job.status
+            rows.append(Record(request_id=rid, session_id=sid, state=state,
+                               job_state=state, state_source="job").data())
+        for rid, sid in retired + missing:
+            if valid_id(rid, 32) or valid_id(sid, 48):
+                rows.append(Record(request_id=rid if valid_id(rid, 32) else None,
+                                   session_id=sid, state="OUTCOME_UNKNOWN",
+                                   state_source="retired").data())
+        for pid, state in inputs:
+            rows.append(Record(operation_type="send_input", pending_id=pid, state=state,
+                               state_source="input").data())
+        return rows
 
     def request_status_readonly(self, request_id):
         """Bounded metadata-only lookup; never admits or replays a job.

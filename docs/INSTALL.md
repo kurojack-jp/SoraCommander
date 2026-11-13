@@ -177,13 +177,15 @@ for eligibility, workspace permissions and connection steps. Use your Secure MCP
 Tunnel as directed there; screen names and procedures can change. After connecting,
 in a new chat ask for `ping`, `status`, `list_sessions` and `tool_catalog`.
 
-Expected: `status` shows `remote_ready: false` and `approval: LOCAL_DEMO_ONLY`, and there are 53 tools.
+Expected: `status` shows `remote_ready: false` and `approval: LOCAL_DEMO_ONLY`, and there are 54 tools.
 
 ChatGPT's file tools reach the configured allowed folders (the checkout only if
 the file is absent). **A command you approve runs with your own Windows rights,
 and it can do anything your account can.**
 
 ## When something goes wrong
+
+If ChatGPT says the review ended with no decision, nothing ran; ask again when you are ready.
 
 Run `.venv\Scripts\python.exe tools\scn_doctor.py` for a read-only setup check
 with fix hints. It starts nothing and never reads the tunnel key or YAML.
@@ -220,8 +222,8 @@ Type `yes` when asked. Piped input is refused.
 
 ## Optional tools added in v0.1.5
 
-The DEV tool list with the optional edit/create pilot contains 53 tools;
-the visible count depends on the Host configuration. The developer-preview limits remain:
+In v0.1.5 the DEV tool list with the optional edit/create pilot contained
+53 tools (54 from v0.1.7); the visible count depends on the Host configuration. The developer-preview limits remain:
 `remote_ready=false`, `LOCAL_DEMO_ONLY`; production and release security gates remain on HOLD.
 
 ### Read-only Git
@@ -291,6 +293,28 @@ the Owner or read from an approved capture; it is not placed in approval argumen
 or command output. After `PENDING` or observer timeout, observe the original
 `pending_id` through `await_command_result`. Do not replay denied, expired or
 unknown operations; unknown outcomes require Owner reconciliation.
+
+## activity (v0.1.7)
+
+Call `activity()` for recent operations, then `activity(mode="lookup", id="<labelled ID>")` for one ID. This read needs no approval window and shows IDs, states and times only. Use the labelled ID with the returned read tool. `UNKNOWN` means the ID is absent from this run's available metadata; it does not prove nonexecution. Never resubmit or generate replacement IDs; report uncertainty and wait for manual reconciliation.
+
+The in-memory window holds 512 operations for one hour and is lost when the Broker restarts. After updating, restart both the Broker and client and refresh ChatGPT's tools.
+
+## Approval ending without a decision (v0.1.7)
+
+Live-checked on 2026-11-13 with real windows through ChatGPT in Broker mode: command windows (Approve, Reject, X, no answer) and `create_file` (X, Approve). Other paths behave the same way in tests but have not been checked with real windows: no answer for `create_file` and the other DEV file tools, DEV `send_input`, the interactive second window, the text edit/create pilot, `run_task` and `ogf_cue`. These DEV checks do not establish production acceptance.
+
+| What the Owner did | Result ChatGPT gets | What it means |
+|---|---|---|
+| Pressed Reject | `DENIED` | The Owner declined |
+| Closed the window with X | `TIMED_OUT`, `reason=CLOSED` | No decision. Nothing ran or was written |
+| Did not answer in time | `TIMED_OUT`, `reason=EXPIRED` | No decision. Nothing ran or was written |
+
+**The meaning of X changed:** before this version, closing the window counted as a reject. Now it ends the review without a decision. A no-answer result is not a refusal and does not prove the Owner was away. The 45 and 60 second time limits are unchanged.
+
+If the answer could not be confirmed, `ERROR` with `NOT_STARTED` means nothing started. If it cannot be told whether something ran or was written, `OUTCOME_UNKNOWN` / `UNKNOWN` requires checking by hand. An `ERROR` without proven `NOT_STARTED`, including a write verification error, also requires checking by hand. For all of these and the three endings above, ChatGPT must report and wait for the Owner's next instruction (`REPORT_AND_WAIT`); never resubmit, send a new request for the same thing, or ask for the window again. Only an explicit new Owner instruction authorizes a new request. `OwnerReviewUnavailable` means no window was shown and nothing ran: report and wait; a new request only on the Owner's explicit instruction.
+
+This covers command windows (`run_command*`, `run_task`, `ogf_cue`), the DEV file tools (`create_directory`, `create_file`, `move_file`, `request_source_patch_dev`), DEV `send_input` and the interactive second window, and the text edit/create pilot when enabled. Commands use `launch_outcome=NOT_STARTED`; files/input use `write_outcome=NOT_STARTED` for this operation, without implying an existing process never started. Exception: Reject in the interactive `SECOND_GUI` retains `ERROR/OwnerAuthorizationRequired` with `launch_outcome=NOT_STARTED`; report and wait. Broker input remains `DENY/DevInteractiveOnly`. `PENDING` is observer wait only: observe the same ID with the existing status/wait tool; it is not terminal `TIMED_OUT`.
 
 ## Run the tests
 

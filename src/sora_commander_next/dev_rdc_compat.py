@@ -108,22 +108,66 @@ def _review(guard, proposal, *, deadline=None, verify=None):
     return deadline if monotonic() < deadline else None
 
 
+def _review_typed(guard, proposal, *, deadline=None, verify=None):
+    """Reuse the file window's invocation-bound proof before any effect."""
+    deadline = min(monotonic() + 45, deadline) if deadline is not None else monotonic() + 45
+    token = object()
+    path = 'DEV_ONLY interactive Python launch' if verify is not None else 'DEV_ONLY stdin input'
+    serialized = json.dumps(proposal, ensure_ascii=True, indent=2)
+    digest = sha256(serialized.encode('utf-8')).hexdigest()
+    options = {}
+    if verify is not None:
+        verify()
+        options = {'title': 'LOCAL interactive Python launch review',
+                   'wording': 'Second approval: launch interactive Python with stdin PIPE. Inspect the exact command.',
+                   'verify': verify}
+    if monotonic() >= deadline:
+        raise ReadBoundaryError('review unavailable')
+    observed = file_edits._show_edit_review_dev(
+        {'path': path, 'diff': ''}, complete_review=serialized,
+        deadline=deadline, _review_token=token,
+        _notice_keys=('interactive_caution', 'interactive_information'), **options)
+    stopped = file_edits._dev_file_review_stop(
+        observed, guard, deadline, token, path, None, digest, 'interactive_review')
+    if type(stopped) is file_edits._VerifiedFileReviewExpiry:
+        return stopped
+    if stopped is None:
+        return deadline
+    if stopped == {'status': 'DENIED'}:
+        return None
+    raise ReadBoundaryError('review unavailable')
+
+
 def _review_file(guard, proposal):
     """The Japanese window, for the four file operations in mutate only.
 
-    _review stays as it is for interactive Python and stdin input. A failed window
-    refuses, with no fallback to the old window. APPROVE is a local answer only:
+    C4 interactive Python and stdin use _review_typed; legacy _review is unchanged.
+    A failed file window refuses, with no fallback to the old window. APPROVE is a local answer only:
     mutate keeps every check it has before writing.
     """
     from .owner_file_review_gate_dev_20261105 import review_once
     deadline = monotonic() + 45
-    decision = review_once(guard, proposal, seconds=45.0)
-    if decision == "ERROR":
-        raise ReadBoundaryError("file review unavailable")
-    if decision != "APPROVE" or monotonic() >= deadline:
+    token = object()
+    decision = review_once(guard, proposal, seconds=45.0, review_token=token)
+    if type(decision) is file_edits._VerifiedFileReviewExpiry:
+        guard.verify()
+        digest = sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()
+        if (decision.review_token is not token or decision.reason not in {"EXPIRED", "CLOSED"}
+                or decision.write_outcome != "NOT_STARTED"
+                or decision.operation != proposal["operation"]
+                or decision.path != proposal.get("path", proposal.get("source"))
+                or decision.old_sha256 != proposal.get("old_sha256")
+                or decision.new_sha256 != digest):
+            raise ReadBoundaryError("file review unavailable")
+        return decision
+    if decision == "DENY":
         return None
+    if decision != "APPROVE" or monotonic() >= deadline:
+        raise ReadBoundaryError("file review unavailable")
     guard.verify()
-    return deadline if monotonic() < deadline else None
+    if monotonic() >= deadline:
+        raise ReadBoundaryError("file review unavailable")
+    return deadline
 
 
 def mutate(operation, roots, **arguments):
@@ -157,7 +201,16 @@ def mutate(operation, roots, **arguments):
                         "diff": preview["diff"], "full_proposed_content": preview["content"]}
         else:
             raise ReadBoundaryError("unsupported operation")
-        deadline = _review_file(guard, proposal)
+        try:
+            deadline = _review_file(guard, proposal)
+        except Exception:
+            return {"status": "ERROR", "error": "ReviewUnavailable",
+                    "write_outcome": "NOT_STARTED", "auto_retry": False,
+                    "required_action": "REPORT_AND_WAIT"}
+        if type(deadline) is file_edits._VerifiedFileReviewExpiry:
+            return {"status": "TIMED_OUT", "stage": "FILE_GUI", "reason": deadline.reason,
+                    "approval_state": "EXPIRED", "write_outcome": "NOT_STARTED",
+                    "auto_retry": False, "required_action": "REPORT_AND_WAIT"}
         if deadline is None:
             return {"status": "DENIED", "outcome": "NOT_STARTED"}
         def verify_owner():
@@ -420,7 +473,11 @@ def authorize_interactive_local(host, request, *, deadline=None, verify=None, be
                 'cwd': request.cwd, 'timeout': request.timeout,
                 'limits': 'Numeric expressions only; each stdin line needs a new GUI decision.'}
     verify = verify if verify is not None else guard.verify
-    if _review(guard, proposal, deadline=deadline, verify=verify) is None:
+    reviewed = _review_typed(guard, proposal, deadline=deadline, verify=verify)
+    if type(reviewed) is file_edits._VerifiedFileReviewExpiry:
+        from .interactive_hooks import InteractiveReviewNoAnswer
+        raise InteractiveReviewNoAnswer(reviewed.reason)
+    if reviewed is None:
         raise PermissionError('interactive launch denied')
     with manager._lock:
         if (manager._closed or monotonic() >= deadline
@@ -473,6 +530,18 @@ def input_status(manager, pending_id, wait_seconds=0):
         return dict(record['result'])
 
 
+def _publish_input_activity(manager, pending_id, session_id, state):
+    try:
+        from .activity import publish
+        publish(getattr(manager, '_activity_store', None), pending_id=pending_id,
+                session_id=session_id, operation_type='send_input', state=state, source='input')
+    except Exception:
+        try:
+            manager._activity_store.invalidate()
+        except Exception:
+            pass
+
+
 def send_input(manager, session_id, input_text, input_id):
     """Reserve before review; write once, never replay or persist input text."""
     from threading import Event, Thread
@@ -492,16 +561,22 @@ def send_input(manager, session_id, input_text, input_id):
                 'status': 'PENDING', 'pending_id': pending_id, 'retry_allowed': False}}
             manager._stdin_attempts[input_id] = pending_id
             manager._stdin_pending[pending_id] = record
+        _publish_input_activity(manager, pending_id, session_id, 'PENDING')
         def once():
             attempted = False
             result = {'status': 'DENIED', 'pending_id': pending_id, 'retry_allowed': False}
             try:
-                deadline = _review(job.stdin_owner, {
+                reviewed = _review_typed(job.stdin_owner, {
                     'operation': 'DEV_ONLY send stdin ONCE',
                     'session_id': session_id, 'request_id': job.request.request_id,
                     'input_id': input_id, 'exact_input': input_text,
                     'bytes': len(data)})  # JSON ensure_ascii makes all controls visible.
-                if deadline is not None:
+                if type(reviewed) is file_edits._VerifiedFileReviewExpiry:
+                    result.update(status='TIMED_OUT', stage='INPUT_GUI', reason=reviewed.reason,
+                                  approval_state='EXPIRED', write_outcome='NOT_STARTED',
+                                  auto_retry=False, required_action='REPORT_AND_WAIT')
+                elif reviewed is not None:
+                    deadline = reviewed
                     with manager._lock:
                         if _active_input_job(manager, session_id) is not job or monotonic() >= deadline:
                             raise PermissionError('review stale')
@@ -511,13 +586,16 @@ def send_input(manager, session_id, input_text, input_id):
                         count = os.write(job.child.stdin.fileno(), data)
                         result['status'] = 'SENT' if count == len(data) else 'UNKNOWN'
             except Exception:
-                result['status'] = 'UNKNOWN' if attempted else 'DENIED'
+                result['status'] = 'UNKNOWN' if attempted else 'ERROR'
+                if not attempted:
+                    result.update(write_outcome='NOT_STARTED', auto_retry=False)
             finally:
                 with manager._lock:
                     if result['status'] == 'UNKNOWN':
                         job.stdin_uncertain = True
                         job.cancel.set()
                     record['result'] = result
+                    _publish_input_activity(manager, pending_id, session_id, result['status'])
                     record['done'].set()
         try:
             Thread(target=once, daemon=True, name='sora-dev-stdin-review').start()
@@ -526,6 +604,7 @@ def send_input(manager, session_id, input_text, input_id):
                 job.stdin_uncertain = True
                 job.cancel.set()
                 record['result'] = {'status': 'UNKNOWN', 'pending_id': pending_id, 'retry_allowed': False}
+                _publish_input_activity(manager, pending_id, session_id, 'UNKNOWN')
                 record['done'].set()
         return {'status': 'PENDING', 'pending_id': pending_id, 'retry_allowed': False}
     except Exception:

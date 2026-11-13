@@ -41,11 +41,21 @@ class SecondGuiSafetyTests(unittest.TestCase):
         self.enterContext(patch.object(OwnerSessionEventLatch, 'verify', verify_latch))
         self.enterContext(patch.object(dev, '_owner', return_value=self.guard))
         self.enterContext(patch.object(dev, 'monotonic', side_effect=lambda: self.now))
+        self.enterContext(patch.object(dev.file_edits, 'monotonic', side_effect=lambda: self.now))
         self.enterContext(patch('sora_commander_next.windows_owner_controller.monotonic',
                                 side_effect=lambda: self.now))
         self.enterContext(patch('sora_commander_next.cli_monitor_bootstrap.ensure_monitor_for_approved_job'))
         self.actual_dialog = dev.file_edits._show_edit_review
         self.gui = self.enterContext(patch.object(dev.file_edits, '_show_edit_review', return_value=True))
+        self.actual_typed_dialog = dev.file_edits._show_edit_review_dev
+        def typed_window(*args, **kwargs):
+            decision = self.gui(*args, **kwargs)
+            if type(decision) is not bool:
+                return decision
+            return dev.file_edits._DevFileReviewOutcome(
+                'APPROVED' if decision else 'REJECT', 'LOCAL_EVENT',
+                kwargs['deadline'], None, kwargs['_review_token'])
+        self.enterContext(patch.object(dev.file_edits, '_show_edit_review_dev', side_effect=typed_window))
         self.request = Command(sys.executable, ('-I', '-S', '-q', '-i'), self.root,
                                timeout=10, interactive=True)
         self.host._owner_review_dispatcher = Mock()
@@ -312,6 +322,29 @@ class SecondGuiSafetyTests(unittest.TestCase):
         self.assert_stopped(self.approve())
         self.gui.assert_called_once()
 
+    def test_forged_second_window_proof_never_launches(self):
+        self.host.approval.reject_local(self.pending.pending_id)
+        from dataclasses import replace
+        mutations = [dict(review_token=object()), dict(deadline=144), dict(reason='FORGED'),
+                     dict(timer_at=None), dict(timer_at=144), dict(timer_at=147),
+                     dict(timer_at=float('nan')), dict(timer_at=float('inf')), dict(timer_at=True)]
+        for mutation in mutations + [True, None, {'status': 'TIMED_OUT'}]:
+            with self.subTest(mutation=mutation):
+                self.now = 100
+                self.request = replace(self.request, request_id=__import__('uuid').uuid4().hex)
+                dev.prepare_interactive(self.host, self.request, True, Decision.REVIEW)
+                self.pending = self.host.approval.create(self.request, self.host._context())
+                def observed(*args, **kw):
+                    self.now = 146
+                    valid = dev.file_edits._DevFileReviewOutcome('EXPIRED', 'LOCAL_EVENT',
+                        kw['deadline'], 145, kw['_review_token'])
+                    if mutation == {'status': 'TIMED_OUT'}:
+                        return mutation
+                    return replace(valid, **mutation) if type(mutation) is dict else mutation
+                with patch.object(dev.file_edits, '_show_edit_review_dev', side_effect=observed):
+                    self.assert_stopped(self.approve())
+        self.launch.assert_not_called()
+
     def test_second_gui_exception_does_not_leak(self):
         self.gui.side_effect = RuntimeError('SECRET argv cwd exception')
         self.assert_stopped(self.approve())
@@ -531,10 +564,57 @@ class SecondGuiSafetyTests(unittest.TestCase):
             result = self.actual_dialog({'path': 'DEV interactive Python', 'diff': ''},
                                         deadline=107, verify=verify)
         self.assertFalse(result)
-        self.assertEqual(timers[0][0], 7000)
+        self.assertEqual(timers[0][0], 7025)  # 25 ms past the deadline
         verify.assert_called_once()
         root.quit.assert_called_once()
         root.destroy.assert_called_once()
+
+
+# Both windows run the same real latch/renderer event permutations.
+from tests.test_dev_rdc_compat import _C4Window, _c4_cases
+
+
+def _c4_second_case(events, return_at, expected):
+    def test(self):
+        window = _C4Window(self, events, return_at)
+        with patch.object(dev.file_edits, '_show_edit_review_dev', side_effect=self.actual_typed_dialog):
+            dispatcher = self.wire_broker()
+            dispatcher._review(self.pending.pending_id)
+        final = dict(self.host.review_status(self.pending.pending_id), pending_id=self.pending.pending_id)
+        status = 'RUNNING' if expected == 'APPROVED' else 'ERROR' if expected in {'REJECT', 'ERROR'} else 'TIMED_OUT'
+        self.assertEqual(final['status'], status, final)
+        if status == 'TIMED_OUT':
+            self.assertEqual(final['stage'], 'SECOND_GUI')
+            self.assertEqual(final['reason'], expected)
+            self.assertEqual(final['approval_state'], 'EXPIRED')
+            self.assertEqual(final['launch_outcome'], 'NOT_STARTED')
+            self.assertFalse(final['auto_retry'])
+            self.assertEqual(final['required_action'], 'REPORT_AND_WAIT')
+            self.assertIsNone(final.get('session_id'))
+        if status == 'RUNNING':
+            self.launch.assert_called_once()
+        else:
+            self.launch.assert_not_called()
+            self.assertFalse(self.manager._dev_interactive_requests[self.request.request_id]['authorized'])
+        self.assertEqual(final['pending_id'], self.pending.pending_id)
+        awaited = self.host.await_command_result(self.pending.pending_id, wait_seconds=0)
+        if status == 'RUNNING':
+            # start is mocked: no job exists to await, but launch evidence survives.
+            self.assertEqual(awaited['error'], 'UnknownSession')
+            self.assertEqual(awaited['launch_outcome'], 'STARTED')
+        else:
+            self.assertEqual(awaited, final)
+        self.assertTrue(dispatcher.offer_local(self.pending.pending_id))
+        window.tk.Tk.assert_called_once()
+        self.assertEqual(self.approve()['status'], 'ERROR')
+        window.tk.Tk.assert_called_once()
+        self.assertEqual(window.timer_delay, 45025)
+    return test
+
+
+for _name, _events, _return_at, _expected in _c4_cases():
+    setattr(SecondGuiSafetyTests, 'test_c4_second_' + _name,
+            _c4_second_case(_events, _return_at, _expected))
 
 
 if __name__ == '__main__':

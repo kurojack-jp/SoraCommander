@@ -36,7 +36,7 @@ class ReadonlyParityTests(unittest.TestCase):
 
     def test_sdk_list_tools_and_owner_chat_gap(self):
         # Seven read-only tools and two Owner-reviewed execution tools added.
-        for pilot, count in ((False, 40), (True, 46)):
+        for pilot, count in ((False, 41), (True, 47)):
             with self.subTest(pilot=pilot):
                 server, host = self.server(pilot=pilot)
                 definitions = asyncio.run(server.list_tools())

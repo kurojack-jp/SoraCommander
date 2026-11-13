@@ -13,7 +13,7 @@
   "approve_trusted_candidate": "Approve this command until revoked",
   "caution": "Review the COMPLETE original request. Closing or expiration never grants approval.",
   "information": "Review the exact request, not only this summary. Approval applies only under the original Owner checks.",
-  "command_close_expiry_notice": "Close or Reject declines this request. If the timer ends with no click, the request expires: that is not a rejection, nothing runs, and the next instruction is awaited.",
+  "command_close_expiry_notice": "Reject declines this request. Closing the window or not answering in time ends the review without a decision; that is not a rejection, and nothing runs. Wait for the next instruction.",
   "body_executable": "Executable: {value}",
   "body_argv": "argv (literal): {value}",
   "body_cwd": "Working directory: {value}",
@@ -24,8 +24,8 @@
   "body_unknown_effects": "Unknown command effects: inspect ALL fields; approval can have side effects.",
   "body_not_remote": "Not a remote MCP approval endpoint.",
   "heading_file_move": "Review a local file move",
-  "file_caution": "Inspect the ENTIRE proposal. Close or Reject declines it. If the timer ends with no click, that is not a rejection and nothing changes.",
-  "file_information": "This window shows one proposal. The local controller checks the target again before any write.",
+  "file_caution": "Inspect the ENTIRE proposal. Reject declines. Closing the window or not answering in time ends the review without a decision; nothing is created, moved or changed.",
+  "file_information": "Close and unanswered expiry are not Owner rejection. This window shows one proposal. The local controller checks the target again before any write.",
   "file_operation": "Operation: {value}",
   "file_operation_create": "Create a new file",
   "file_operation_edit": "Change an existing file",
@@ -56,5 +56,9 @@
   "trusted_option": "Reusable approval offered",
   "yes": "Yes (additional risk; inspect full details)",
   "no": "No",
-  "unavailable": "Not provided"
+  "unavailable": "Not provided",
+  "interactive_caution": "Inspect the ENTIRE proposal. Reject declines. Closing the window or not answering in time ends this review without a decision; this launch or stdin write does not start.",
+  "interactive_information": "Close and unanswered expiry are not Owner rejection. Report the original result and wait for new Owner instructions; do not retry or reopen the review.",
+  "pilot_file_caution": "Inspect the ENTIRE proposal. Reject declines. Closing the window or not answering in time ends the review without a decision; no file is changed.",
+  "pilot_file_information": "Close and unanswered expiry are not Owner rejection. No file is changed; the result is reported as no decision (TIMED_OUT)."
 }

@@ -409,7 +409,7 @@ class Phase2Tests(unittest.TestCase):
                 # Ten bounded reads, two non-writing previews, local catalog only.
                 "list_folder_page", "read_text_page", "find_files", "search_code",
                 "path_info", "read_text_lines", "read_many_text_files",
-                "compare_text_files", "read_text_chunk", "sha256_file", "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check", "list_tasks", "run_task", "ogf_cue",
+                "compare_text_files", "read_text_chunk", "sha256_file", "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check", "list_tasks", "run_task", "ogf_cue", "activity",
                 "preview_source_create", "preview_source_patch", "tool_catalog",
                 "create_directory", "create_file", "move_file", "request_source_patch_dev",
                 "list_processes", "get_config", "send_input",

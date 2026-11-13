@@ -353,7 +353,7 @@ class SharedGUITests(unittest.TestCase):
             self.assertIs(edits._show_edit_review({'path': 'disposable', 'diff': 'UNCHANGED LEGACY DIFF'}), True)
         self.assertEqual(inserted, ['disposable\n\n', 'UNCHANGED LEGACY DIFF'])
         # The 45s deny timer remains; 100ms is an audio-only Owner alert.
-        self.assertEqual(timers, [45000, 100])
+        self.assertEqual(timers, [45025, 100])  # 25 ms past the deadline
 
     def test_complete_text_and_timeout_are_bound_without_real_gui(self):
         inserted = []

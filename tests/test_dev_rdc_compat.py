@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import shutil
 from uuid import uuid4
 from types import SimpleNamespace
@@ -71,7 +72,8 @@ class DevRdcTests(unittest.TestCase):
         self.gui.return_value = "APPROVE"
         self.guard.verify.side_effect = PermissionError("sensitive identity")
         result = self.apply()
-        self.assertEqual(result["outcome"], "NOT_STARTED")
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["write_outcome"], "NOT_STARTED")
         self.assertNotIn("sensitive", str(result))
         self.assertEqual(self.source.read_bytes(), b"x = 1\n")
 
@@ -146,7 +148,7 @@ class DevRdcTests(unittest.TestCase):
 
     def test_expired_owner_decision_does_not_write(self):
         with patch.object(dev, "monotonic", side_effect=[0, 46]):
-            self.assertEqual(self.apply()["status"], "DENIED")
+            self.assertEqual(self.apply()["status"], "ERROR")
         self.assertEqual(self.source.read_bytes(), b"x = 1\n")
         # A late answer stops at the first clock check, before the session is asked again.
         self.guard.verify.assert_not_called()
@@ -334,7 +336,8 @@ class DevRdcTests(unittest.TestCase):
         self.gui.return_value = "APPROVE"
         self.guard.verify.side_effect = PermissionError("sensitive identity")
         result = self.call("create_file", path=str(target), content="x")
-        self.assertEqual(result["outcome"], "NOT_STARTED")
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["write_outcome"], "NOT_STARTED")
         self.assertNotIn("sensitive", str(result))
         self.assertFalse(target.exists())
 
@@ -374,7 +377,9 @@ class DevRdcTests(unittest.TestCase):
                 self.gui.assert_called_once()
                 self.assertIs(self.gui.call_args.args[0], self.guard)
                 self.assertEqual(self.gui.call_args.args[1]["operation"], operation)
-                self.assertEqual(self.gui.call_args.kwargs, {"seconds": 45.0})
+                self.assertEqual(self.gui.call_args.kwargs["seconds"], 45.0)
+                self.assertEqual(set(self.gui.call_args.kwargs), {"seconds", "review_token"})
+                self.assertIsNotNone(self.gui.call_args.kwargs["review_token"])
         self.old_window.assert_not_called()
 
     def test_a_failed_window_refuses_without_the_old_window_or_a_write(self):
@@ -383,20 +388,24 @@ class DevRdcTests(unittest.TestCase):
         for operation, arguments in self.each_operation():
             with self.subTest(operation=operation):
                 result = self.call(operation, **arguments)
-                self.assertEqual(result["status"], "REJECTED")
-                self.assertEqual(result["outcome"], "NOT_STARTED")
-                self.assertFalse(result["retry_allowed"])
+                self.assertEqual(result["status"], "ERROR")
+                self.assertEqual(result["write_outcome"], "NOT_STARTED")
+                self.assertFalse(result["auto_retry"])
         self.assertEqual(self.state(), before)
         self.old_window.assert_not_called()
 
     def test_reject_expiry_and_any_other_answer_write_nothing(self):
         before = self.state()
-        for decision in ("DENY", "EXPIRED", "MAYBE", None, True):
+        for decision in ("DENY", "EXPIRED", "CLOSED", "MAYBE", None, True):
             self.gui.return_value = decision
             for operation, arguments in self.each_operation():
                 with self.subTest(decision=decision, operation=operation):
                     result = self.call(operation, **arguments)
-                    self.assertEqual(result, {"status": "DENIED", "outcome": "NOT_STARTED"})
+                    if decision == "DENY":
+                        self.assertEqual(result, {"status": "DENIED", "outcome": "NOT_STARTED"})
+                    else:
+                        self.assertEqual(result["status"], "ERROR")
+                        self.assertEqual(result["write_outcome"], "NOT_STARTED")
         self.assertEqual(self.state(), before)
         self.old_window.assert_not_called()
 
@@ -439,7 +448,77 @@ class DevRdcTests(unittest.TestCase):
         for operation, arguments in self.each_operation():
             with self.subTest(operation=operation):
                 result = self.through_the_real_gate(operation, arguments, wrong)
-                self.assertEqual((result["status"], result["outcome"]), ("REJECTED", "NOT_STARTED"))
+                self.assertEqual((result["status"], result["write_outcome"]), ("ERROR", "NOT_STARTED"))
+        self.assertEqual(self.state(), before)
+        self.old_window.assert_not_called()
+
+    def test_c5_every_no_answer_and_lost_reply_calls_zero_writers(self):
+        self.frames = []
+        before = self.state()
+        for reason in ('CLOSED', 'EXPIRED', 'DENY', 'lost', 'bad_nonce'):
+            def answer(frame):
+                if reason == 'lost':
+                    return b''
+                return json.dumps({'nonce': '0' * 64 if reason == 'bad_nonce' else frame['nonce'],
+                                   'decision': 'EXPIRED' if reason == 'bad_nonce' else reason}).encode()
+            for operation, arguments in self.each_operation():
+                with self.subTest(reason=reason, operation=operation), \
+                        patch.object(dev, '_write_new_text_file') as create, \
+                        patch.object(dev.os, 'rename') as rename, \
+                        patch.object(file_edits, 'replace_text') as replace, \
+                        patch.object(Path, 'mkdir') as mkdir:
+                    result = self.through_the_real_gate(operation, arguments, answer)
+                    if reason in ('CLOSED', 'EXPIRED'):
+                        self.assertEqual(result, {'status': 'TIMED_OUT', 'stage': 'FILE_GUI',
+                            'reason': reason, 'approval_state': 'EXPIRED', 'write_outcome': 'NOT_STARTED',
+                            'auto_retry': False, 'required_action': 'REPORT_AND_WAIT'})
+                    elif reason == 'DENY':
+                        self.assertEqual(result, {'status': 'DENIED', 'outcome': 'NOT_STARTED'})
+                    else:
+                        self.assertEqual(result['status'], 'ERROR')
+                        self.assertEqual(result['write_outcome'], 'NOT_STARTED')
+                    for writer in (create, rename, replace, mkdir):
+                        self.assertEqual(writer.call_count, 0)
+        self.assertEqual(self.state(), before)
+        self.old_window.assert_not_called()
+
+    def test_c5_writer_entry_then_deadline_failure_never_times_out(self):
+        clock = [100.0]
+        for operation, arguments in self.each_operation():
+            seam = {'create_file': (dev, '_write_new_text_file'), 'move_file': (dev.os, 'rename'),
+                    'request_source_patch_dev': (file_edits, 'replace_text'),
+                    'create_directory': (Path, 'mkdir')}[operation]
+            clock[0] = 100.0
+            def failed(*a, **kw):
+                clock[0] = 200.0
+                if operation == 'create_file':
+                    Path(arguments['path']).write_bytes(b'partial')
+                raise OSError('synthetic failure after writer entry')
+            with self.subTest(operation=operation), patch.object(dev, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(*seam, side_effect=failed) as writer:
+                result = self.call(operation, **arguments)
+                self.assertEqual(result['status'], 'OUTCOME_UNKNOWN')
+                self.assertEqual(result['outcome'], 'UNKNOWN')
+                writer.assert_called_once()
+        self.old_window.assert_not_called()
+
+    def test_c5_mixed_or_foreign_typed_proof_never_writes(self):
+        from dataclasses import replace
+        before = self.state()
+        for field, bad in (('review_token', object()), ('reason', 'DENY'),
+                           ('write_outcome', 'UNKNOWN'), ('operation', 'create_file'),
+                           ('path', 'other'), ('old_sha256', '0' * 64), ('new_sha256', '0' * 64)):
+            def forged(guard, proposal, *, seconds, review_token):
+                valid = file_edits._VerifiedFileReviewExpiry(review_token, proposal['path'],
+                    proposal['old_sha256'], sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest(),
+                    proposal['operation'], reason='CLOSED')
+                return replace(valid, **{field: bad})
+            with self.subTest(field=field), patch.object(file_edits, 'replace_text') as writer:
+                self.gui.side_effect = forged
+                result = self.apply()
+                self.assertEqual(result['status'], 'ERROR')
+                self.assertEqual(result['write_outcome'], 'NOT_STARTED')
+                writer.assert_not_called()
         self.assertEqual(self.state(), before)
         self.old_window.assert_not_called()
 
@@ -454,10 +533,10 @@ class DevRdcTests(unittest.TestCase):
 
     def test_a_session_change_after_approval_writes_nothing(self):
         self.guard.verify.side_effect = PermissionError("locked")
-        self.assertEqual(self.apply()["outcome"], "NOT_STARTED")
+        self.assertEqual(self.apply()["write_outcome"], "NOT_STARTED")
         self.assertEqual(self.source.read_bytes(), b"x = 1\n")
 
-    def test_interactive_and_stdin_reviews_keep_the_old_window(self):
+    def test_legacy_review_keeps_the_bool_window(self):
         self.assertIsNotNone(dev._review(self.guard, {"command": "synthetic"}))
         self.old_window.assert_called_once()
         self.gui.assert_not_called()
@@ -490,7 +569,7 @@ class DevRdcTests(unittest.TestCase):
         self.assertTrue(config["rootsConfigured"])
         self.assertEqual(config["rootCount"], 1)
         self.assertNotIn(str(self.root), str(config))
-        self.gui.return_value = False
+        self.gui.return_value = "DENY"
         self.assertEqual(asyncio.run(call("request_source_patch_dev", dict(path=str(self.source), old_text="x = 1", new_text="x = 2", expected_sha256=self.digest)))["status"], "DENIED")
         self.assertEqual(asyncio.run(call("create_directory", {"path": str(self.root / "sdk")}))["status"], "DENIED")
         self.assertEqual(asyncio.run(call("create_file", {"path": str(self.root / "sdk.txt"), "content": "x"}))["status"], "DENIED")
@@ -512,6 +591,255 @@ class DevRdcTests(unittest.TestCase):
                 _validate_arguments(name, args)
             with self.assertRaises(ToolError):
                 asyncio.run(call(name, args))
+
+
+
+
+# C4 shares the real C3 renderer/latch; only Tk and effects are synthetic.
+class _C4Window:
+    def __init__(self, test, events=(), return_at=None):
+        self.test, self.events, self.return_at = test, events, return_at
+        self.callbacks = {}
+        self.tk = Mock()
+        test.enterContext(patch.dict(sys.modules, {'tkinter': self.tk}))
+        test.enterContext(patch.object(dev, 'monotonic', side_effect=lambda: test.now))
+        test.enterContext(patch.object(file_edits, 'monotonic', side_effect=lambda: test.now))
+        def actions(_tk, _card, reject, approve):
+            self.callbacks.update(REJECT=reject, APPROVED=approve)
+        def after(ms, callback):
+            if 'EXPIRED' not in self.callbacks:
+                self.callbacks['EXPIRED'] = callback
+                self.timer_delay = ms
+        root = self.tk.Tk.return_value
+        root.after.side_effect = after
+        root.protocol.side_effect = lambda _name, cb: self.callbacks.update(CLOSED=cb)
+        def loop():
+            for at, event in self.events:
+                test.now = at
+                self.callbacks[event]()
+            if self.return_at is not None:
+                test.now = self.return_at
+        root.mainloop.side_effect = loop
+        test.enterContext(patch.multiple('sora_commander_next.approval_visual_theme',
+            window=Mock(), header=Mock(), notice=Mock(), viewer=Mock(), review_actions=actions))
+
+
+def _c4_cases():
+    from itertools import permutations
+    cases = [('approve', [(110, 'APPROVED')], None, 'APPROVED'),
+             ('reject', [(110, 'REJECT')], None, 'REJECT'),
+             ('no_event', [], 146, 'ERROR'),
+             ('late_return', [(144, 'APPROVED')], 146, 'ERROR')]
+    for at in (144, 145, 146):
+        for event in ('CLOSED', 'EXPIRED'):
+            expected = 'ERROR' if event == 'EXPIRED' and at < 145 else event
+            cases.append((f'{event}_{at}', [(at, event)], None, expected))
+        for order in permutations(('APPROVED', 'CLOSED', 'EXPIRED')):
+            expected = order[0]
+            if expected == 'APPROVED' and at >= 145 or expected == 'EXPIRED' and at < 145:
+                expected = 'ERROR'
+            cases.append((f'race_{at}_' + '_'.join(order), [(at, e) for e in order], None, expected))
+    cases += [('reject_first', [(110, 'REJECT'), (145, 'EXPIRED')], None, 'REJECT')]
+    return cases
+
+
+class C4InputReviewTests(unittest.TestCase):
+    def setUp(self):
+        from threading import Event, RLock
+        self.now = 100.0
+        from sora_commander_next.activity import ActivityStore
+        self.manager = SimpleNamespace(_lock=RLock(), _stdin_attempts={}, _stdin_pending={},
+                                       _activity_store=ActivityStore())
+        self.job = SimpleNamespace(stdin_owner=Mock(), request=SimpleNamespace(request_id='c'*32),
+                                   child=Mock(), stdin_uncertain=False, cancel=Event())
+        self.enterContext(patch.object(dev, '_active_input_job', return_value=self.job))
+        self.enterContext(patch('threading.Thread', side_effect=lambda **kw:
+            SimpleNamespace(start=lambda: kw['target']())))
+        self.write = self.enterContext(patch.object(dev.os, 'write', return_value=2))
+        self.sid, self.iid = 'a'*48, 'b'*32
+
+    def submit(self):
+        pending = dev.send_input(self.manager, self.sid, '1\n', self.iid)
+        self.assertEqual(pending['status'], 'PENDING')
+        final = dev.input_status(self.manager, pending['pending_id'])
+        self.assertEqual(final['pending_id'], pending['pending_id'])
+        self.assertFalse(final['retry_allowed'])
+        rows = self.manager._activity_store.snapshot()
+        self.assertEqual(rows[0]['state'], final['status'])
+        self.assertIsNone(rows[0]['job_state'])
+        self.assertNotIn('launch_outcome', final)
+        self.assertNotIn('session_id', final)
+        self.assertEqual(dev.input_status(self.manager, pending['pending_id']), final)
+        self.assertEqual(dev.send_input(self.manager, self.sid, '2\n', self.iid),
+                         {'status': 'DENIED', 'error': 'InputIdConsumed', 'retry_allowed': False})
+        return final
+
+    def test_write_entered_then_failure_or_short_never_times_out(self):
+        for fault in ('raise', 'short'):
+            with self.subTest(fault=fault):
+                self.manager._stdin_attempts.clear()
+                self.manager._stdin_pending.clear()
+                self.job.stdin_uncertain = False
+                self.job.cancel.clear()
+                self.now = 100
+                _C4Window(self, [(110, 'APPROVED')])
+                def write(*args):
+                    self.now = 146
+                    if fault == 'raise':
+                        raise OSError('private error after entry')
+                    return 1
+                self.write.side_effect = write
+                final = self.submit()
+                self.assertEqual(final['status'], 'UNKNOWN')
+                self.assertNotIn('write_outcome', final)
+                self.assertTrue(self.job.stdin_uncertain)
+                self.assertTrue(self.job.cancel.is_set())
+        self.assertEqual(self.write.call_count, 2)
+
+    def test_ui_failure_and_owner_loss_are_error_before_write(self):
+        for owner_loss in (False, True):
+            self.manager._stdin_attempts.clear()
+            self.manager._stdin_pending.clear()
+            if owner_loss:
+                self.job.stdin_owner.verify.side_effect = PermissionError('private Owner detail')
+            def observe(*args, **kw):
+                if not owner_loss:
+                    raise RuntimeError('private UI detail')
+                return file_edits._DevFileReviewOutcome('CLOSED', 'LOCAL_EVENT',
+                    kw['deadline'], 100, kw['_review_token'])
+            with patch.object(dev, 'monotonic', return_value=100), \
+                 patch.object(file_edits, 'monotonic', return_value=100), \
+                 patch.object(file_edits, '_show_edit_review_dev', side_effect=observe):
+                final = self.submit()
+            self.assertEqual(final['status'], 'ERROR')
+            self.assertEqual(final['write_outcome'], 'NOT_STARTED')
+            self.assertNotIn('private', repr(final))
+        self.write.assert_not_called()
+
+    def test_deadline_crossed_in_final_job_check_never_writes(self):
+        _C4Window(self, [(110, 'APPROVED')])
+        calls = []
+        def active(*args):
+            calls.append(True)
+            if len(calls) == 2:
+                self.now = 145
+            return self.job
+        with patch.object(dev, '_active_input_job', side_effect=active):
+            final = self.submit()
+        self.assertEqual(final['status'], 'ERROR')
+        self.assertEqual(final['write_outcome'], 'NOT_STARTED')
+        self.write.assert_not_called()
+
+    def test_broker_input_stays_denied_without_wire_or_window(self):
+        from sora_commander_next.owner_broker_dev import DevBrokerHost
+        from sora_commander_next.owner_broker_service import _SCHEMAS
+        transport = Mock()
+        host = DevBrokerHost(transport)
+        sdk = build_server(host)
+        async def call():
+            _, result = await sdk.call_tool('send_input', dict(
+                session_id=self.sid, input_text='1\n', input_id=self.iid))
+            return result
+        with patch.object(dev, 'send_input') as send, \
+             patch.object(file_edits, '_show_edit_review_dev') as window:
+            self.assertEqual(asyncio.run(call()), {'status': 'DENY', 'error': 'DevInteractiveOnly'})
+            send.assert_not_called()
+            window.assert_not_called()
+        self.assertNotIn('send_input', _SCHEMAS)
+        self.assertEqual(transport.mock_calls, [])
+        self.write.assert_not_called()
+
+    def test_legacy_bool_and_deadline_consumers_unchanged(self):
+        cases = [([(110, 'APPROVED')], None, True), ([(110, 'REJECT')], None, False),
+                 ([(110, 'CLOSED')], None, False), ([(145, 'EXPIRED')], None, False),
+                 ([], 146, False)]
+        for events, returned, approved in cases:
+            for legacy in ('bool', 'deadline'):
+                with self.subTest(events=events, legacy=legacy):
+                    self.now = 100
+                    _C4Window(self, events, returned)
+                    if legacy == 'bool':
+                        self.assertIs(file_edits._show_edit_review({'path': 'DEV', 'diff': ''},
+                                                                  deadline=145), approved)
+                    else:
+                        result = dev._review(self.job.stdin_owner, {'command': 'synthetic'}, deadline=145)
+                        self.assertEqual(result, 145 if approved else None)
+        self.write.assert_not_called()
+
+    def test_bilingual_interactive_notice_uses_no_answer_wording(self):
+        from sora_commander_next.owner_review_i18n import load_catalog
+        for locale in ('en', 'ja'):
+            self.now = 100
+            _C4Window(self, [(110, 'CLOSED')])
+            with patch('sora_commander_next.approval_visual_theme.notice') as notice:
+                file_edits._render_edit_review({'path': 'DEV', 'diff': ''}, deadline=145,
+                    locale=locale, _notice_keys=('interactive_caution', 'interactive_information'))
+            words = load_catalog(locale)
+            self.assertEqual([c.args[2] for c in notice.call_args_list],
+                             [words['interactive_caution'], words['interactive_information']])
+            self.assertIn('Reject declines' if locale == 'en' else '却下ボタンは提案を却下', words['interactive_caution'])
+            self.assertIn('does not start' if locale == 'en' else '開始しません', words['interactive_caution'])
+        self.write.assert_not_called()
+
+    def test_forged_mixed_or_missing_proof_is_error_without_write(self):
+        from dataclasses import replace
+        mutations = [dict(review_token=object()), dict(deadline=144), dict(reason='FORGED'),
+                     dict(timer_at=None), dict(timer_at=144), dict(timer_at=147),
+                     dict(timer_at=float('nan')), dict(timer_at=float('inf')), dict(timer_at=True),
+                     dict(decision='APPROVED', review_token=object())]
+        def observed(*args, **kw):
+            self.now = 146
+            valid = file_edits._DevFileReviewOutcome('EXPIRED', 'LOCAL_EVENT',
+                kw['deadline'], 145, kw['_review_token'])
+            return replace(valid, **mutation) if type(mutation) is dict else mutation
+        for mutation in mutations + [True, None, {'status': 'TIMED_OUT'}]:
+            with self.subTest(mutation=mutation):
+                self.now = 100
+                self.manager._stdin_attempts.clear()
+                self.manager._stdin_pending.clear()
+                with patch.object(dev, 'monotonic', side_effect=lambda: self.now), \
+                     patch.object(file_edits, 'monotonic', side_effect=lambda: self.now), \
+                     patch.object(file_edits, '_show_edit_review_dev', side_effect=observed):
+                    # A result-shaped dictionary is not an observation either.
+                    if mutation == {'status': 'TIMED_OUT'}:
+                        with patch.object(file_edits, '_show_edit_review_dev', return_value=mutation):
+                            final = self.submit()
+                    else:
+                        final = self.submit()
+                self.assertEqual(final['status'], 'ERROR')
+                self.assertEqual(final['write_outcome'], 'NOT_STARTED')
+                self.assertFalse(self.job.stdin_uncertain)
+                self.assertFalse(self.job.cancel.is_set())
+        self.write.assert_not_called()
+
+
+def _c4_input_case(events, return_at, expected):
+    def test(self):
+        window = _C4Window(self, events, return_at)
+        final = self.submit()
+        status = 'SENT' if expected == 'APPROVED' else 'DENIED' if expected == 'REJECT' else 'ERROR' if expected == 'ERROR' else 'TIMED_OUT'
+        self.assertEqual(final['status'], status)
+        if status == 'TIMED_OUT':
+            self.assertEqual(final, dict(status='TIMED_OUT', pending_id=final['pending_id'],
+                retry_allowed=False, stage='INPUT_GUI', reason=expected,
+                approval_state='EXPIRED', write_outcome='NOT_STARTED', auto_retry=False,
+                required_action='REPORT_AND_WAIT'))
+        if status == 'ERROR':
+            self.assertEqual(final['write_outcome'], 'NOT_STARTED')
+        if status == 'SENT':
+            self.write.assert_called_once()
+        else:
+            self.write.assert_not_called()
+        self.assertFalse(self.job.stdin_uncertain)
+        self.assertFalse(self.job.cancel.is_set())
+        self.assertEqual(window.timer_delay, 45025)
+        window.tk.Tk.assert_called_once()
+    return test
+
+
+for _name, _events, _return_at, _expected in _c4_cases():
+    setattr(C4InputReviewTests, 'test_c4_input_' + _name,
+            _c4_input_case(_events, _return_at, _expected))
 
 
 if __name__ == "__main__":

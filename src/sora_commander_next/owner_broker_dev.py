@@ -96,7 +96,7 @@ class OwnerBrokerBackend:
                     "review_status", "request_status", "read_process_output",
                     "await_process_output", "stop_process", "stop_process_wait",
                     "list_sessions", "previous_sessions", "previous_output",
-                    "status", "recovery_overview"):
+                    "status", "recovery_overview", "activity"):
             return getattr(self._host, name)
         raise AttributeError(name)
 

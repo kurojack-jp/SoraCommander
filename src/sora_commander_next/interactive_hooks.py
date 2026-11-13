@@ -18,6 +18,15 @@ fixture manager the same way. This module imports nothing local.
 from dataclasses import dataclass
 
 
+class InteractiveReviewNoAnswer(Exception):
+    """DEV hook reports a proven first X/timer event before launch admission."""
+    def __init__(self, reason):
+        if type(reason) is not str or reason not in {'EXPIRED', 'CLOSED'}:
+            raise ValueError('invalid interactive review reason')
+        self.reason = reason
+        super().__init__(reason)
+
+
 @dataclass(frozen=True)
 class InteractiveHooks:
     """The DEV interactive entry points, as callables (see dev_rdc_compat)."""

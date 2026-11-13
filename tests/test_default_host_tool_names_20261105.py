@@ -1,7 +1,7 @@
 """The default Host's public tools, by exact name. Reads registered metadata: nothing runs and no window opens.
 
 Adding, removing or replacing a tool must change this list on purpose, in review.
-tests/test_mcp_ai_tool_catalog.py covers the 44-tool personal DEV configuration.
+tests/test_mcp_ai_tool_catalog.py covers the 54-tool personal DEV configuration.
 """
 from pathlib import Path
 import sys
@@ -23,7 +23,7 @@ DEFAULT_TOOLS = frozenset({
     "previous_sessions", "read_many_text_files", "read_process_output", "read_text_chunk", "read_text_file",
     "read_text_lines", "read_text_page", "recovery_overview", "request_source_patch_dev", "request_status",
     "review_status", "run_command", "run_command_wait", "search_code", "send_input", "sha256_file", "status",
-    "stop_process", "stop_process_wait", "tool_catalog",
+    "stop_process", "stop_process_wait", "tool_catalog", "activity",
 })
 NEVER_REMOTE = frozenset({"approve_local", "reject_local", "add_grant_local", "replace_text"})
 

@@ -8,6 +8,7 @@ import re
 from secrets import token_hex
 
 from .policy import Policy
+from .no_answer import valid_no_answer
 
 MAX_WIRE_BYTES = 8192
 MAX_REPLY_BYTES = 262144
@@ -86,7 +87,8 @@ class BrokerHost:
         except (ValueError, TypeError, UnicodeError):
             return {"status": "DENIED", "error": "SmallFrameScopeExceededOrInvalid"}
         try:
-            reply = decode_frame(self._transport.request(raw), max_bytes=MAX_REPLY_BYTES)
+            reply = decode_frame(self._transport.request(raw),
+                                 max_bytes=36 * 1024 if action == "activity" else MAX_REPLY_BYTES)
             if (set(reply) != {"v", "action", "call_id", "result"}
                     or type(reply["v"]) is not int or reply["v"] != 1
                     or reply["action"] != action or reply["call_id"] != call_id
@@ -101,12 +103,36 @@ class BrokerHost:
                     and (type(reply["result"]["request_id"]) is not str
                          or reply["result"]["request_id"] != arguments["request_id"])):
                 raise ValueError("unbound result request")
+            if reply["result"]["status"] == "TIMED_OUT":
+                if (not valid_no_answer(reply["result"])
+                        or any(key in arguments and key in reply["result"]
+                               and reply["result"][key] != arguments[key]
+                               for key in ("pending_id", "request_id"))):
+                    raise ValueError("unverified Owner review timeout")
             return reply["result"]
         except BrokerUnavailable:
             return {"status": "UNAVAILABLE", "error": "ProtectedBrokerUnavailable"}
         except Exception:
             return {"status": "OUTCOME_UNKNOWN", "error": "BrokerReplyUnconfirmed",
                     "auto_retry": False}
+
+    def activity(self, mode="recent", id=None, limit=10, **extra):
+        from .activity import arguments, reply, validate_reply
+        values = dict(mode=mode, id=id, limit=limit, **extra)
+        try:
+            mode, identity, limit = arguments(values)
+        except (ValueError, TypeError):
+            return reply(status="ERROR", error="InvalidArguments", action="CORRECT_READ_ARGUMENTS")
+        result = self._call("activity", mode=mode, id=identity, limit=limit)
+        if result == {"status": "DENIED", "error": "ActionNotAllowed"}:
+            return reply(mode, identity, status="UNAVAILABLE", error="ActivityUnsupported")
+        if result in ({"status": "UNAVAILABLE", "error": "ProtectedBrokerUnavailable"},
+                      {"status": "UNAVAILABLE", "error": "ConnectionClosed"}):
+            return reply(mode, identity, status="UNAVAILABLE", error=result["error"])
+        try:
+            return validate_reply(result, mode, identity)
+        except Exception:
+            return reply(mode, identity, status="OUTCOME_UNKNOWN", error="BrokerReplyUnconfirmed")
 
     def run_command(self, background=False, **payload):
         # Validation and all policy/admission are repeated in the Broker.

@@ -2,6 +2,7 @@
 from threading import Lock, Thread
 from .windows_owner_controller import WindowsOwnerController, diagnostic_fields, review_diagnostics
 from .owner_approval_broker import OwnerApprovalBroker
+from .no_answer import valid_no_answer
 
 class OwnerReviewDispatcher:
     def __init__(self, controller):
@@ -51,11 +52,8 @@ class OwnerReviewDispatcher:
                         'DENY_DUPLICATE_CONFLICT', 'DENY_REPLAY_GUARD_FULL'}):
                 raise ValueError('invalid broker result')
             if result["status"] == "TIMED_OUT" and (
-                    result.get("stage") != "FIRST_GUI"
-                    or result.get("reason") != "EXPIRED"
-                    or result.get("approval_state") != "EXPIRED"
-                    or result.get("launch_outcome") != "NOT_STARTED"
-                    or result.get("session_id") is not None):
+                    result.get("stage") not in ("FIRST_GUI", "SECOND_GUI")
+                    or not valid_no_answer(result)):
                 raise ValueError("unverified Owner review timeout")
         except Exception:
             result = {"status": "OUTCOME_UNKNOWN", "error": "OwnerConfirmationUnavailable",
@@ -68,6 +66,35 @@ class OwnerReviewDispatcher:
                                          "session_id": self._last_job, **diagnostic_fields(result)}
             while len(self._results) > 128:
                 self._results.pop(next(iter(self._results)))
+        # Observation only: nothing here may change or fail the review result,
+        # so the import and every attribute read stay inside the guard.
+        # Copy correlation under the approval lock, never inside dispatcher lock.
+        host = None
+        try:
+            from .activity import publish
+            host = self._controller.host
+            matches = [rid for rid, pid, _ in host.approval.activity_snapshot() if pid == pending_id]
+            if len(matches) != 1:
+                host._activity_store.invalidate()
+            else:
+                publish(host._activity_store, request_id=matches[0], pending_id=pending_id,
+                        session_id=result.get("session_id"), state=result["status"],
+                        review_state=result["status"], source="review")
+        except Exception:
+            try:
+                host._activity_store.invalidate()
+            except Exception:
+                pass
+
+    def activity_snapshot(self):
+        """Safe scalar snapshot; no Thread.is_alive, reviewer or polling."""
+        with self._lock:
+            result = tuple((pid, value.get("status"), value.get("session_id"))
+                           for pid, value in self._results.items())
+            active = self._active_pending_id
+        if active is not None and all(pid != active for pid, _, _ in result):
+            result += ((active, "PENDING", None),)
+        return result
 
     def review_status(self, pending_id):
         """Read-only review outcome; knowing an ID never approves a command."""

@@ -23,6 +23,11 @@ DIALOG_SCRIPT=Path(__file__).resolve().with_name("owner_command_dialog_localized
 from .owner_ui_language import owner_ui_language
 
 
+# The child draws its window and exits inside this grace. Without it the
+# parent gives up first and a true expiry is reported as ERROR (C8, 2026-11-13).
+CHILD_GRACE_SECONDS = 3.0
+
+
 class OwnerApprovalBroker:
     def __init__(self, controller):
         if type(controller) is not WindowsOwnerController:
@@ -36,7 +41,7 @@ class OwnerApprovalBroker:
         job=None
         latch=None
         dispatched=False
-        deadline_expired=False
+        admitted=False
         try:
             controller=self._controller
             controller._verify()
@@ -48,6 +53,9 @@ class OwnerApprovalBroker:
             remaining=pending.expires_at-controller.host.approval.clock()
             if remaining<=0:
                 raise PermissionError("review expired")
+            # From here this call holds a live review. Before this point it
+            # found none, showed no window and can have started nothing.
+            admitted=True
             # Never let UI outlive the pending record, nor indefinitely wait.
             budget=min(45.0,remaining)
             nonce=secrets.token_hex(32)
@@ -91,24 +99,22 @@ class OwnerApprovalBroker:
             answer={}
             def collect():
                 try:
-                    answer["output"],_=child.communicate(input=payload,timeout=budget+.5)
+                    answer["output"],_=child.communicate(input=payload,timeout=budget+CHILD_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     answer["timeout"]=True
                 except Exception:
                     answer["error"]=True
             reader=Thread(target=collect,daemon=True)
             reader.start()
-            deadline=monotonic()+budget+.5
+            deadline=monotonic()+budget+CHILD_GRACE_SECONDS
             while reader.is_alive():
                 latch.verify()
                 controller._guard.verify()
                 controller._guard.verify_process(child.pid)
                 reader.join(timeout=0.12)
                 if monotonic()>=deadline:
-                    deadline_expired=True
                     raise PermissionError("Owner confirmation timed out")
             if answer.get("timeout"):
-                deadline_expired=True
                 raise PermissionError("Owner confirmation timed out")
             if answer.get("error") or "output" not in answer:
                 raise PermissionError("Owner UI did not answer")
@@ -120,18 +126,19 @@ class OwnerApprovalBroker:
                     or set(response)!={"nonce","decision"}
                     or type(response["nonce"]) is not str
                     or not hmac.compare_digest(response["nonce"],nonce)
-                    or response["decision"] not in ("APPROVE","DENY","EXPIRED")):
+                    or response["decision"] not in ("APPROVE","DENY","EXPIRED","CLOSED")):
                 raise PermissionError("untrusted dialog response")
             controller._guard.verify()
             latch.verify()
-            if response["decision"]=="EXPIRED":
+            if response["decision"] in ("EXPIRED", "CLOSED"):
                 # No launch has been dispatched. Retire the old review
                 # atomically before reporting a verified timeout.
                 expired=controller.reject_local(pending_id)
                 if expired.get("status")!="REJECTED":
                     raise PermissionError("expired review could not be retired")
-                return {"status":"TIMED_OUT", **review_diagnostics(
-                    'FIRST_GUI', 'EXPIRED', 'EXPIRED', 'NOT_STARTED')}
+                return {"status":"TIMED_OUT", "auto_retry": False,
+                    "required_action": "REPORT_AND_WAIT", **review_diagnostics(
+                    'FIRST_GUI', response["decision"], 'EXPIRED', 'NOT_STARTED')}
             if response["decision"]=="DENY":
                 # Reject must consume the saved review as well as avoid
                 # launching any job. Otherwise the same pending_id could
@@ -169,17 +176,15 @@ class OwnerApprovalBroker:
                         except KeyError:
                             pass  # Already expired, rejected or consumed.
             except Exception:
-                # We still return ERROR. LocalApproval normally cannot fail
-                # except when the record is already gone.
+                # Failure to revoke cannot prove that nothing dispatched.
                 pass
-            if dispatched:
+            # A live review that this call could not retire may have been
+            # consumed elsewhere, so not-started is not proven. A call that
+            # never held a live review reports its own failure only.
+            if dispatched or (admitted and not retired):
                 return {'status': 'OUTCOME_UNKNOWN', 'error': 'OwnerConfirmationUnavailable',
                         **review_diagnostics('LAUNCH', 'LAUNCH_UNKNOWN', 'UNKNOWN', 'UNKNOWN')}
-            if deadline_expired and retired:
-                # Verified parent-side expiry BEFORE any command launch.
-                # UNKNOWN or failed revocation must never be mislabeled.
-                return {"status":"TIMED_OUT", **review_diagnostics(
-                    'FIRST_GUI', 'EXPIRED', 'EXPIRED', 'NOT_STARTED')}
+            # Retirement proves no dispatch, never a child timer event.
             return {"status":"ERROR","error":"OwnerConfirmationUnavailable",
                     **review_diagnostics('FIRST_GUI', 'CONFIRMATION_UNAVAILABLE',
                                          'NOT_CONSUMED', 'NOT_STARTED')}

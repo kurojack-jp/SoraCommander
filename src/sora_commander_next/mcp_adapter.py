@@ -23,7 +23,7 @@ from .file_edits import (preview_text_edit as preview_edit_readonly,
                          preview_source_create as preview_source_create_readonly,
                          preview_source_patch as preview_source_patch_readonly,
                          StalePreviewError)
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 from pydantic import Field
 import math
 from time import monotonic, sleep
@@ -77,6 +77,10 @@ def _local_registered_catalog(server, host):
 
 def _validate_arguments(name, arguments):
     """Validate wire types before SDK coercion; never echo untrusted values."""
+    if name == "activity":
+        from .activity import arguments as activity_arguments
+        activity_arguments(arguments)
+        return
     if name in {"request_source_create", "request_source_patch", "source_review_status", "cancel_source_review"}:
         validate_source_arguments(name, arguments)
         return
@@ -372,6 +376,12 @@ def build_server(host: Host, *, approved_icon_path=None, approved_icon_sha256=No
             try:
                 _validate_arguments(name, arguments)
             except Exception:
+                if name == "activity":
+                    import json
+                    from mcp.types import TextContent
+                    from .activity import reply
+                    result = reply(status="ERROR", error="InvalidArguments", action="CORRECT_READ_ARGUMENTS")
+                    return [TextContent(type="text", text=json.dumps(result))], result
                 raise ToolError("Invalid tool request") from None
             try:
                 return await super().call_tool(name, arguments)
@@ -414,21 +424,14 @@ def build_server(host: Host, *, approved_icon_path=None, approved_icon_sha256=No
         return wrapped
 
     @tool_decorator()
-    def run_command(executable: Annotated[str, Field(description="Absolute path to the program binary; this is not a shell command string.")], argv: Annotated[list[str], Field(description="Exact string argument vector for one command; avoid credentials, scripts or private file content.")], cwd: Annotated[str, Field(description="Absolute working directory for the process within the local Owner policy.")],
+    def run_command(executable: Annotated[str, Field(description='Absolute path to the program binary; this is not a shell command string. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], argv: Annotated[list[str], Field(description="Exact string argument vector for one command; avoid credentials, scripts or private file content.")], cwd: Annotated[str, Field(description="Absolute working directory for the process within the local Owner policy.")],
                     timeout: Annotated[float, Field(description="Execution timeout in seconds, 0.01 to 3600; default 5.")] = 5.0, output_limit: Annotated[int, Field(description="Maximum captured output bytes, 128 to 65536; default 8192.")] = 8192,
                     background: Annotated[bool, Field(description="Whether to return immediately after launch; default false, unlike the wait API.")] = False,
                     interactive: Annotated[bool, Field(description="DEV_ONLY opt-in stdin PIPE for an Owner-reviewed isolated Python numeric REPL; default false. Requires background or asynchronous invocation.")] = False,
                     request_id: Annotated[str | None, Field(description="Optional original request correlation ID (32 lowercase hex characters); NOT Owner permission.")] = None) -> dict[str, Any]:
-        """Legacy immediate-start API. REVIEW returns pending_id.
+        """Legacy one-shot command submission. REVIEW returns pending_id. Prefer run_command_wait. interactive=True requires background=True and the DEV_ONLY numeric Python REPL allowlist.
 
-        interactive=True requires background=True and the DEV_ONLY isolated
-        Python numeric REPL allowlist, with explicit local launch review.
-
-        Prefer run_command_wait for normal work: it observes the Owner GUI
-        click and returns job output without asking the Owner to type
-        'approved'. Do not reissue a command merely to check its result.
-
-Use only for legacy immediate command submission. A REVIEW result needs a later status/wait call; normally prefer run_command_wait. Owner approval is local to Windows. Never resubmit the same operation on timeout or UNKNOWN. ERROR OwnerReviewUnavailable (reason OWNER_SESSION_UNAVAILABLE, REVIEW_BUSY or OWNER_REVIEW_FAILED; launch_outcome NOT_STARTED) means no Owner dialog was shown and nothing ran: report it and wait for the Owner, never resubmit automatically."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED, nothing ran. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         # An explicit client ID is a replay correlation label, NEVER a grant.
         # Omit it when absent to retain the Host's original UUID generation.
         replay = {"request_id": request_id} if request_id is not None else {}
@@ -442,21 +445,14 @@ Use only for legacy immediate command submission. A REVIEW result needs a later 
             background=background, **replay)
 
     @tool_decorator()
-    def run_command_wait(executable: Annotated[str, Field(description="Absolute path to the program binary; this is not a shell command string.")], argv: Annotated[list[str], Field(description="Exact string argument vector for one command; avoid credentials, scripts or private file content.")], cwd: Annotated[str, Field(description="Absolute working directory for the process within the local Owner policy.")],
+    def run_command_wait(executable: Annotated[str, Field(description='Absolute path to the program binary; this is not a shell command string. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], argv: Annotated[list[str], Field(description="Exact string argument vector for one command; avoid credentials, scripts or private file content.")], cwd: Annotated[str, Field(description="Absolute working directory for the process within the local Owner policy.")],
                          timeout: Annotated[float, Field(description="Execution timeout in seconds, 0.01 to 3600; default 5.")] = 5.0, output_limit: Annotated[int, Field(description="Maximum captured output bytes, 128 to 65536; default 8192.")] = 8192,
-                         wait_seconds: Annotated[float, Field(description="Seconds to await Owner click and original job, 0 to 90; default 50. On timeout use await_command_result, not run_command_wait again.")] = 50.0,
+                         wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0,
                          interactive: Annotated[bool, Field(description="DEV_ONLY opt-in stdin PIPE for an Owner-reviewed isolated Python numeric REPL; default false. Requires background or asynchronous invocation.")] = False,
                          request_id: Annotated[str | None, Field(description="Optional original request correlation ID (32 lowercase hex characters); NOT Owner permission.")] = None) -> dict[str, Any]:
-        """Run, wait for local Owner approval, then return bounded output.
+        """Submit one command for local Owner GUI approval and bounded job output. interactive=True requires background=True and the DEV_ONLY numeric Python REPL allowlist. Use wait_seconds=0 for asynchronous observation.
 
-        interactive=True opts into the DEV_ONLY isolated numeric Python REPL.
-        Use wait_seconds=0 for prompt asynchronous observation, then send_input.
-
-        Owner permission comes only from the Windows GUI, not MCP. On a
-        wait timeout use await_command_result(pending_id) or existing output
-        tools; never repeat run_command_wait to avoid duplicate execution.
-
-Preferred command submission for tasks needing Owner GUI approval and a bounded wait for output. Use once per operation. On PENDING or timeout, continue through await_command_result with the returned pending_id; never reissue this command. ERROR OwnerReviewUnavailable (reason OWNER_SESSION_UNAVAILABLE, REVIEW_BUSY or OWNER_REVIEW_FAILED; launch_outcome NOT_STARTED) means no Owner dialog was shown and nothing ran: report it and wait for the Owner, never resubmit automatically."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED, nothing ran. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         replay = {"request_id": request_id} if request_id is not None else {}
         if interactive:
             if type(host) is not Host or importlib.util.find_spec(f"{__package__}.dev_rdc_compat") is None:
@@ -475,12 +471,12 @@ Read-only, no approval window. The Owner writes the presets by hand in a local f
         return {"tasks_configured": bool(tasks), "tasks": [task.public() for task in tasks]}
 
     @tool_decorator()
-    def run_task(name: Annotated[str, Field(description="Exact preset name from list_tasks (lowercase letters, digits and hyphens). It selects the Owner's fixed command; no argument can be added or changed.")],
-                 wait_seconds: Annotated[float, Field(description="Seconds to await Owner click and original job, 0 to 90; default 50. On timeout use await_command_result, not run_task again.")] = 50.0,
+    def run_task(name: Annotated[str, Field(description="Exact preset name from list_tasks (lowercase letters, digits and hyphens). It selects the Owner's fixed command; no argument can be added or changed. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.")],
+                 wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0,
                  request_id: Annotated[str | None, Field(description="Optional original request correlation ID (32 lowercase hex characters); NOT Owner permission.")] = None) -> dict[str, Any]:
-        """Start one Owner task preset by name; the normal Owner approval window opens for every run.
+        """Start one Owner task preset by name; the normal Owner approval window opens for every run. An unknown name returns DENY UnknownTask and starts nothing.
 
-Same as run_command_wait with the preset's executable, argv, cwd, timeout and output_limit: same window, policy, results and pending flow. Use once per operation. On PENDING or timeout, continue through await_command_result with the returned pending_id; never call run_task again for the same operation. ERROR OwnerReviewUnavailable (reason OWNER_SESSION_UNAVAILABLE, REVIEW_BUSY or OWNER_REVIEW_FAILED; launch_outcome NOT_STARTED) means no Owner dialog was shown and nothing ran: report it and wait for the Owner, never resubmit automatically. An unknown name returns DENY UnknownTask and starts nothing."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED, nothing ran. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         task = next((item for item in getattr(host, "task_presets", ()) if item.name == name), None)
         if task is None:
             return {"status": "DENY", "error": "UnknownTask"}
@@ -492,17 +488,17 @@ Same as run_command_wait with the preset's executable, argv, cwd, timeout and ou
 
     @tool_decorator()
     def ogf_cue(
-            session_id: Annotated[str, Field(description="Ephemeral UUID from OGF's Bridge panel, supplied by the Owner in chat or read from an approved capture; never placed in approval argv.")],
+            session_id: Annotated[str, Field(description="Ephemeral UUID from OGF's Bridge panel, supplied by the Owner in chat or read from an approved capture; never placed in approval argv. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.")],
             action: Annotated[str, Field(description="One of none, wave, nod, shake_head, small_guts_pose, celebrate; semantic presentation only.")],
             emotion: Annotated[str, Field(description="One of neutral, happy, excited, curious, surprised, concerned, sad, proud.")],
             intensity: Annotated[float, Field(description="Finite number from 0 to 1 inclusive; booleans and strings are refused.")],
             gaze: Annotated[str, Field(description="One of neutral, user, content, away; no arbitrary target or input.")],
             message: Annotated[str | None, Field(description="Optional text, at most 120 Unicode code points, no control characters; null clears the message.")] = None,
             ttl_ms: Annotated[int, Field(description="Integer cue lifetime from 100 to 10000 milliseconds, default 3000.")] = 3000,
-            wait_seconds: Annotated[float, Field(description="Observer wait from 0 to 90 seconds, default 50; after PENDING/timeout use await_command_result with the original pending_id.")] = 50.0) -> dict[str, Any]:
-        """Send one bounded OGF Bridge cue; every cue opens the normal Owner approval window.
+            wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0) -> dict[str, Any]:
+        """Send one bounded OGF Bridge cue through run_command_wait and its Owner review. The Owner supplies the Bridge panel session; only documented values are allowed. Approval shows a one-time protected session file path, never the UUID. Feature off returns DENY OgfBridgeNotConfigured.
 
-The Owner reads the session from OGF's Bridge panel and supplies it in chat, or ChatGPT reads an approved capture. Only the documented lists and ranges are allowed. Approval shows a one-time protected session file path, never the UUID. Returns run_command_wait's result unchanged: after PENDING or observer timeout, use await_command_result with the original pending_id; never call ogf_cue again for the same cue. A DENIED review or review expiry before launch sends nothing; do not infer implemented TIMED_OUT metadata. ERROR/UNKNOWN requires observation and Owner reconciliation, never replay. Feature off returns DENY OgfBridgeNotConfigured."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED, nothing ran. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         from .ogf_cue import validate
         arguments = dict(session_id=session_id, action=action, emotion=emotion,
                          intensity=intensity, gaze=gaze, message=message,
@@ -514,11 +510,11 @@ The Owner reads the session from OGF's Bridge panel and supplies it in chat, or 
         return bridge.send(host, **arguments)
 
     @tool_decorator()
-    def await_command_result(pending_id: Annotated[str, Field(description="Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit.")],
-                             wait_seconds: Annotated[float, Field(description="Bounded observation time in seconds, 0 to 90 (default 50); continue existing pending ID after timeout.")] = 50.0) -> dict[str, Any]:
+    def await_command_result(pending_id: Annotated[str, Field(description='Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')],
+                             wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0) -> dict[str, Any]:
         """Wait for an existing Owner decision/job, without another execution.
 
-Use after an earlier run_command_wait or REVIEW when you already have pending_id. Wait for that same Owner decision and job without new execution, approval, or submission. Timeout is not permission to retry."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED for commands or write_outcome=NOT_STARTED for input, nothing ran / no input was sent. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         return host.await_command_result(pending_id, wait_seconds=wait_seconds)
 
     @tool_decorator()
@@ -537,18 +533,54 @@ Use after an earlier run_command_wait or REVIEW when you already have pending_id
                 "chatgpt_tool_visibility": catalog["chatgpt_tool_visibility"]}
 
     @tool_decorator()
-    def review_status(pending_id: Annotated[str, Field(description="Existing 32-hex pending_id from an Owner command review or DEV_ONLY send_input; NOT the request_id or input_id. Read-only; never fabricate or resubmit.")]) -> dict[str, Any]:
-        """Read-only observation using an existing pending_id: returns the stored Owner command approval/launch result, or the DEV_ONLY send_input input outcome when the ID belongs to stdin input. Does not approve, launch, send input or rerun. For command reviews, RUNNING / LAUNCH_ACCEPTED may remain after the job has COMPLETED: this is NOT the current job state. Use request_status(request_id) or await_process_output(session_id) for the job. For send_input, observe its original pending_id, not the command launch, and never send the input again. On PENDING follow the same pending_id; UNKNOWN does not prove no job ran or no input was sent. Never resubmit to check status."""
+    def activity(
+        mode: Annotated[Literal["recent", "lookup"], Field(description='Read-only, no Owner window. recent (default): newest admissions in the bounded 512-operation, one-hour current execution process window, not complete history. lookup: resolve labelled request_id/pending_id/session_id by membership. States separate stored review/launch from current job; producer UTC RFC 3339 times are not OS execution times. PENDING is an observation, not approval expiry. UNKNOWN does not prove nonexecution. Use returned existing read tool; never resubmit/replay/approve/clear or generate replacement IDs. Uncertainty requires manual reconciliation; report failures and wait. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')] = "recent",
+        id: Annotated[str | None, Field(description="Null for recent; required for lookup: exactly 32 or 48 lowercase hex, without normalization. Legacy internal IDs, input_id, OGF identities, Codex job IDs and wire IDs are excluded. Keep the original IDs. request_status takes request_id; review_status takes command/input pending_id; edit_review_status takes edit/create pending_id only when registered. list_sessions and recovery_overview take no IDs. recovery_overview is a separate read and retains its Owner-verified private archive boundary; activity never calls it.")] = None,
+        limit: Annotated[int, Field(description="Strict integer 1..20 for recent, default 10; lookup requires 10. No coercion, bool, null, extras or invalid mode combinations. Reply: status/mode/scope/query_id/id_kind/records/count/truncated/error/next_tool/next_args/required_action/auto_retry. Each record: operation_type, labelled request_id/pending_id/session_id, state/review_state/job_state/state_source, created_at/updated_at/finished_at, time_basis=PRODUCER_EVENT and route/action/auto_retry=false. At most 20 rows and 32768 UTF-8 JSON bytes. No retained rows does not mean no operations. Cached expired sources give OUTCOME_UNKNOWN; collisions AMBIGUOUS. Failures require report and wait; no automatic retry.")] = 10,
+    ) -> dict[str, Any]:
+        """Read-only, no Owner window. Resolve existing labelled IDs or list the
+        newest admissions in this current execution process (Broker lifetime in
+        Broker mode), not prior journals, archives or arbitrary tool-call history.
+        recent: id=null, strict integer limit 1..20 (default 10). lookup: id is
+        exactly 32/48 lowercase hex, limit=10; no normalization, coercion, bool,
+        extras or explicit null mode/limit. Legacy IDs, input_id, OGF identities,
+        Codex job IDs and wire IDs are excluded. Window: 512 operations, one hour;
+        empty/truncated results are bounded coverage, never complete history.
+        Reply keys: status, mode, scope, query_id, id_kind, records, count,
+        truncated, error, next_tool, next_args, required_action, auto_retry=false.
+        Records contain only operation_type; request_id/pending_id/session_id;
+        state/review_state/job_state/state_source; created_at/updated_at/finished_at
+        (UTC RFC 3339 or null), time_basis=PRODUCER_EVENT; and route/action fields.
+        Producer times are not exact OS execution times. Current job state wins;
+        stored review/launch state stays separate; input/edit state is its own.
+        Retired/cache-only source gives OUTCOME_UNKNOWN; collisions AMBIGUOUS;
+        malformed data ERROR, missing Broker UNAVAILABLE, unconfirmed wire reply
+        OUTCOME_UNKNOWN. Maximum 20 records / 32768 UTF-8 JSON bytes.
+        Use labelled IDs with the returned existing read tool: request_status
+        with request_id, review_status with command/input pending_id,
+        edit_review_status with edit/create pending_id when registered,
+        list_sessions or recovery_overview with no args. recovery_overview is
+        suggested separately, never called here; private archive access retains
+        its existing Owner-verification boundary. PENDING is an observation, not
+        approval expiry. UNKNOWN does not prove nonexecution. Keep the original
+        IDs; never resubmit, replay, approve, clear, or generate replacement IDs.
+        Uncertain outcomes require manual reconciliation; report failures and wait.
+
+TIMED_OUT is terminal and routes to REPORT_AND_WAIT with no next tool; report and wait for the Owner's next instruction, never resubmit."""
+        return host.activity(mode=mode, id=id, limit=limit)
+
+    @tool_decorator()
+    def review_status(pending_id: Annotated[str, Field(description='Existing 32-hex pending_id from an Owner command review or DEV_ONLY send_input; NOT the request_id or input_id. Read-only; never fabricate or resubmit. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')]) -> dict[str, Any]:
+        """Read-only observation using an existing pending_id: returns the stored Owner command approval/launch result, or the DEV_ONLY send_input input outcome when the ID belongs to stdin input. Does not approve, launch, send input or rerun. For command reviews, RUNNING / LAUNCH_ACCEPTED may remain after the job has COMPLETED: this is NOT the current job state. Use request_status(request_id) or await_process_output(session_id) for the job. For send_input, observe its original pending_id, not the command launch, and never send the input again.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED for commands or write_outcome=NOT_STARTED for input, nothing ran / no input was sent. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         return host.review_status(pending_id)
 
     @tool_decorator()
-    def request_status(request_id: Annotated[str, Field(description="REQUIRED original request correlation ID (32 lowercase hex characters); NOT Owner permission.")]) -> dict[str, Any]:
+    def request_status(request_id: Annotated[str, Field(description='REQUIRED original request correlation ID (32 lowercase hex characters); NOT Owner permission. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')]) -> dict[str, Any]:
         """Read-only lookup by the original caller's request ID.
 
-        No new command, approval, or queue entry is created. UNKNOWN does
-        not prove the old request never ran and MUST NOT trigger auto-retry.
-
-Use with the original request_id to check a prior command's status without re-submission. UNKNOWN is inconclusive and must never justify an automatic retry."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED, nothing ran. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         return host.request_status(request_id)
 
     @tool_decorator()
@@ -684,10 +716,12 @@ Use to preview one literal exact-text source replacement against the expected SH
             install_host_interactive(host)
 
         @tool_decorator()
-        def send_input(session_id: Annotated[str, Field(description="Exact OWN active interactive JobManager session ID (48 lowercase hex); never a PID or foreign session.")],
+        def send_input(session_id: Annotated[str, Field(description='Exact OWN active interactive JobManager session ID (48 lowercase hex); never a PID or foreign session. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')],
                        input_text: Annotated[str, Field(description="One UTF-8 numeric Python expression or print(expression), ending in newline, at most 1024 bytes; no secrets or other controls.")],
                        input_id: Annotated[str, Field(description="Unique 32 lowercase hex input ID consumed before GUI review; NEVER resend after timeout, error or UNKNOWN, even with a different ID.")]) -> dict[str, Any]:
-            """DEV_ONLY: ask the local Owner GUI to send one exact numeric line ONCE to this manager's previously approved interactive Python process. Returns pending_id; observe through await_command_result or review_status only. No arbitrary code, secrets, PID attachment, input logging or retries. UNKNOWN stops the session."""
+            """DEV_ONLY: ask the local Owner GUI to send one exact numeric line ONCE to this manager's previously approved interactive Python process. Returns pending_id; observe through await_command_result or review_status only. No arbitrary code, secrets, PID attachment, input logging or retries. UNKNOWN stops the session.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. PENDING is observer wait only: observe the original pending_id. input_id stays consumed; retry_allowed=false. Broker input remains DENY/DevInteractiveOnly."""
             from .dev_rdc_compat import send_input as submit_input
             if dev_client:
                 return {"status": "DENY", "error": "DevInteractiveOnly"}
@@ -713,24 +747,32 @@ Use to preview one literal exact-text source replacement against the expected SH
                 return mutate(operation, tuple(host.policy.roots), **arguments)
 
         @tool_decorator()
-        def create_directory(path: Annotated[str, Field(description="Absolute absent directory under configured Owner roots; existing parent required, no recursive creation.")]) -> dict[str, Any]:
-            """DEV_ONLY: ask the local Owner GUI to create one absent directory in configured roots. Reject links, protected names and existing targets; no command/job spawn. UNKNOWN requires manual reconciliation, never retry or assumed rollback."""
+        def create_directory(path: Annotated[str, Field(description='Absolute absent directory under configured Owner roots; existing parent required, no recursive creation. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')]) -> dict[str, Any]:
+            """DEV_ONLY: ask the local Owner GUI to create one absent directory in configured roots. Reject links, protected names and existing targets; no command/job spawn. UNKNOWN requires manual reconciliation, never retry or assumed rollback.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation."""
             return dev_mutate("create_directory", path=path)
 
         @tool_decorator()
-        def create_file(path: Annotated[str, Field(description="Absolute absent file under configured Owner roots; existing parent directory required, never overwrite.")],
+        def create_file(path: Annotated[str, Field(description='Absolute absent file under configured Owner roots; existing parent directory required, never overwrite. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')],
                         content: Annotated[str, Field(description="Full proposed UTF-8 text, at most 65536 bytes; may contain secrets. Avoid submitting secrets; the complete content is shown to the local Owner GUI before creation.")]) -> dict[str, Any]:
-            """DEV_ONLY: ask the local Owner GUI to create one new text file in configured roots, showing its path and complete content first. Existing targets are never overwritten; links and protected names are rejected; no command or job spawn. UNKNOWN requires manual reconciliation, never retry or assumed rollback."""
+            """DEV_ONLY: ask the local Owner GUI to create one new text file in configured roots, showing its path and complete content first. Existing targets are never overwritten; links and protected names are rejected; no command or job spawn. UNKNOWN requires manual reconciliation, never retry or assumed rollback.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation."""
             return dev_mutate("create_file", path=path, content=content)
 
         @tool_decorator()
-        def move_file(source: Annotated[str, Field(description="Absolute existing ordinary single-link file in configured Owner roots; directories and protected names are denied.")], destination: Annotated[str, Field(description="Absolute absent destination in configured Owner roots; existing non-linked parent required, never overwrite.")]) -> dict[str, Any]:
-            """DEV_ONLY Windows: request local Owner GUI review of one exact file move in existing roots. No overwrite, directory move or job spawn. Cooperative checks are not protected CAS. UNKNOWN requires manual reconciliation; never auto-retry or assume rollback."""
+        def move_file(source: Annotated[str, Field(description='Absolute existing ordinary single-link file in configured Owner roots; directories and protected names are denied. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], destination: Annotated[str, Field(description="Absolute absent destination in configured Owner roots; existing non-linked parent required, never overwrite.")]) -> dict[str, Any]:
+            """DEV_ONLY Windows: request local Owner GUI review of one exact file move in existing roots. No overwrite, directory move or job spawn. Cooperative checks are not protected CAS. UNKNOWN requires manual reconciliation; never auto-retry or assume rollback.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation."""
             return dev_mutate("move_file", source=source, destination=destination)
 
         @tool_decorator()
-        def request_source_patch_dev(path: Annotated[str, Field(description="Absolute existing source file within configured Owner roots; DEV_ONLY, never a protected Broker permission.")], old_text: Annotated[str, Field(description="Exact literal anchor, one occurrence only, up to 4096 UTF-8 bytes; may contain secrets, avoid submitting them.")], new_text: Annotated[str, Field(description="Literal replacement up to 4096 UTF-8 bytes; may contain secrets. Full proposed source is shown to local Owner before writing.")], expected_sha256: Annotated[str, Field(description="Required lowercase SHA-256 of inspected current source; reverified after Owner review and immediately before replacement.")]) -> dict[str, Any]:
-            """DEV_ONLY cooperative literal source patch: reuse preview_source_patch, show the complete proposed content and diff to local Owner GUI, then recheck SHA before replacement. One exact anchor only; no fuzzy edit, job spawn or protected Broker acceptance. Never retry an UNKNOWN result."""
+        def request_source_patch_dev(path: Annotated[str, Field(description='Absolute existing source file within configured Owner roots; DEV_ONLY, never a protected Broker permission. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], old_text: Annotated[str, Field(description="Exact literal anchor, one occurrence only, up to 4096 UTF-8 bytes; may contain secrets, avoid submitting them.")], new_text: Annotated[str, Field(description="Literal replacement up to 4096 UTF-8 bytes; may contain secrets. Full proposed source is shown to local Owner before writing.")], expected_sha256: Annotated[str, Field(description="Required lowercase SHA-256 of inspected current source; reverified after Owner review and immediately before replacement.")]) -> dict[str, Any]:
+            """DEV_ONLY cooperative literal source patch: reuse preview_source_patch, show the complete proposed content and diff to local Owner GUI, then recheck SHA before replacement. One exact anchor only; no fuzzy edit, job spawn or protected Broker acceptance. Never retry an UNKNOWN result.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation."""
             return dev_mutate("request_source_patch_dev", path=path, old_text=old_text, new_text=new_text, expected_sha256=expected_sha256)
 
         @tool_decorator()
@@ -748,9 +790,15 @@ Use to preview one literal exact-text source replacement against the expected SH
     # Never expose remote editing unless the locally opted-in disposable pilot exists.
     pilot = getattr(host, "_edit_review_pilot", None)
     if pilot is not None:
+        try:
+            pilot._activity_store = host._activity_store
+        except Exception:
+            pass
         @tool_decorator()
-        def request_text_edit(path: Annotated[str, Field(description="Path to the target within the already-configured Owner read/edit roots; path alone grants no access.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")], expected_sha256: Annotated[str, Field(description="Expected 64-character lowercase SHA-256 of current file content; stale values must fail.")]) -> dict[str, Any]:
-            """Submit one full-content text replacement for local Owner review after inspecting the SHA-bound preview. Can write on Owner approval; never call twice after timeout. Use edit_review_status/await_edit_result with pending_id."""
+        def request_text_edit(path: Annotated[str, Field(description='Path to the target within the already-configured Owner read/edit roots; path alone grants no access. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")], expected_sha256: Annotated[str, Field(description="Expected 64-character lowercase SHA-256 of current file content; stale values must fail.")]) -> dict[str, Any]:
+            """Submit one full-content text replacement for local Owner review after inspecting the SHA-bound preview. Can write on approval. Observe the original pending_id with edit_review_status/await_edit_result.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation. PENDING is observer wait only: use edit_review_status/await_edit_result with the same pending_id."""
             try:
                 host.policy.require_write_path(path)
                 return pilot.request(path, content, expected_sha256)
@@ -760,14 +808,11 @@ Use to preview one literal exact-text source replacement against the expected SH
                 return {"status": "ERROR", "error": "EDIT_REJECTED"}
 
         @tool_decorator()
-        def request_text_edit_wait(path: Annotated[str, Field(description="Path to the target within the already-configured Owner read/edit roots; path alone grants no access.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")], expected_sha256: Annotated[str, Field(description="Expected 64-character lowercase SHA-256 of current file content; stale values must fail.")],
-                                   wait_seconds: Annotated[float, Field(description="Seconds to await Owner edit decision, 0 to 90; default 50. On timeout use await_edit_result.")] = 50.0) -> dict[str, Any]:
+        def request_text_edit_wait(path: Annotated[str, Field(description='Path to the target within the already-configured Owner read/edit roots; path alone grants no access. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")], expected_sha256: Annotated[str, Field(description="Expected 64-character lowercase SHA-256 of current file content; stale values must fail.")],
+                                   wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0) -> dict[str, Any]:
             """Submit ONE disposable edit review; wait for verified Owner result.
 
-            Never repeats a write after a timeout. Use await_edit_result with
-            the returned pending_id for a continuing review.
-
-Preferred one-shot Owner-review edit submission with bounded wait. Uses expected old SHA-256 and complete proposed content. If wait expires, use await_edit_result with same pending_id, never resubmit."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation. PENDING is observer wait only: use edit_review_status/await_edit_result with the same pending_id."""
             if (type(wait_seconds) not in (int, float)
                     or not math.isfinite(wait_seconds)
                     or not 0 <= wait_seconds <= 90):
@@ -776,22 +821,26 @@ Preferred one-shot Owner-review edit submission with bounded wait. Uses expected
             return _await_submitted_edit_data_only(pilot, initial, wait_seconds)
 
         @tool_decorator()
-        def edit_review_status(pending_id: Annotated[str, Field(description="Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit.")]) -> dict[str, Any]:
-            """Use with an existing pending_id to inspect an edit/create review status. Read-only observation; never approves, rewrites or resends content."""
+        def edit_review_status(pending_id: Annotated[str, Field(description='Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')]) -> dict[str, Any]:
+            """Use with an existing pending_id to inspect an edit/create review status. Read-only observation; never approves, rewrites or resends content.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation. PENDING is observer wait only: use edit_review_status/await_edit_result with the same pending_id."""
             return pilot.status(pending_id)
 
         @tool_decorator()
-        def await_edit_result(pending_id: Annotated[str, Field(description="Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit.")],
-                              wait_seconds: Annotated[float, Field(description="Bounded observation time in seconds, 0 to 90 (default 50); continue existing pending ID after timeout.")] = 50.0) -> dict[str, Any]:
+        def await_edit_result(pending_id: Annotated[str, Field(description='Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')],
+                              wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0) -> dict[str, Any]:
             """Observe an existing edit/create review; never resubmit content.
 
-Use after a pending edit/create review to wait for that same decision/outcome. Never resubmit an edit or assume UNKNOWN means not written; on timeout reuse pending_id only."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation. PENDING is observer wait only: use edit_review_status/await_edit_result with the same pending_id."""
             return _await_edit_data_only(pilot, pending_id, wait_seconds)
 
         if getattr(pilot, 'enable_create', False) is True:
             @tool_decorator()
-            def request_text_create(path: Annotated[str, Field(description="Proposed new file path in permitted Owner edit scope; must not overwrite.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")]) -> dict[str, Any]:
-                """Submit one new text file creation for local Owner review. Only enabled in the explicit DEV edit pilot; do not overwrite existing files or resubmit an uncertain result. Prefer preview_source_create first."""
+            def request_text_create(path: Annotated[str, Field(description='Proposed new file path in permitted Owner edit scope; must not overwrite. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")]) -> dict[str, Any]:
+                """Submit one new text file creation for local Owner review. Only enabled in the explicit DEV edit pilot; do not overwrite existing files or resubmit an uncertain result. Prefer preview_source_create first.
+
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation. PENDING is observer wait only: use edit_review_status/await_edit_result with the same pending_id."""
                 try:
                     host.policy.require_write_path(path)
                     return pilot.request_create(path, content)
@@ -799,11 +848,11 @@ Use after a pending edit/create review to wait for that same decision/outcome. N
                     return {'status': 'ERROR', 'error': 'CREATE_REJECTED'}
 
             @tool_decorator()
-            def request_text_create_wait(path: Annotated[str, Field(description="Proposed new file path for a single Owner-reviewed create; must not overwrite.")], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")],
-                                         wait_seconds: Annotated[float, Field(description="Seconds to await Owner create decision, 0 to 90; default 50. On timeout use await_edit_result.")] = 50.0) -> dict[str, Any]:
+            def request_text_create_wait(path: Annotated[str, Field(description='Proposed new file path for a single Owner-reviewed create; must not overwrite. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')], content: Annotated[str, Field(description="Full proposed text; may contain secrets. Avoid submitting secrets; this submission is written only after the local Owner review approves it.")],
+                                         wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0) -> dict[str, Any]:
                 """Submit ONE disposable create review, then wait for outcome.
 
-Preferred one-shot new-file creation proposal with bounded Owner review wait. Use once; on PENDING continue via await_edit_result, never duplicate a possibly committed write."""
+DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); write_outcome=NOT_STARTED, nothing was written. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. A write verification ERROR without NOT_STARTED also requires manual reconciliation. PENDING is observer wait only: use edit_review_status/await_edit_result with the same pending_id."""
                 if (type(wait_seconds) not in (int, float)
                         or not math.isfinite(wait_seconds)
                         or not 0 <= wait_seconds <= 90):

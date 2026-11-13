@@ -43,6 +43,27 @@ class UnifiedOperationWaitTests(unittest.TestCase):
         self.host._edit_review_pilot = pilot
         return pilot, build_server(self.host)
 
+    def test_command_timeout_guidance_survives_sdk_status_and_wait(self):
+        server = build_server(self.host)
+        dispatcher = Mock()
+        self.host._owner_review_dispatcher = dispatcher
+        pid = "a" * 32
+        for reason in ("CLOSED", "EXPIRED"):
+            payload = dict(status="TIMED_OUT", stage="FIRST_GUI", reason=reason,
+                approval_state="EXPIRED", launch_outcome="NOT_STARTED", session_id=None,
+                auto_retry=False, required_action="REPORT_AND_WAIT")
+            dispatcher.review_status.return_value = payload
+            with self.subTest(reason=reason), patch.object(self.host.jobs, "start") as start:
+                self.assertEqual(call(server, "review_status", {"pending_id": pid}), payload)
+                self.assertEqual(call(server, "await_command_result", {
+                    "pending_id": pid, "wait_seconds": 0}), dict(payload, pending_id=pid))
+                with patch.object(self.host, "run_command", return_value={
+                        "status": "REVIEW", "pending_id": pid}) as submit:
+                    result = self.host.run_command_wait(wait_seconds=0)
+                self.assertEqual(result, dict(payload, pending_id=pid))
+                submit.assert_called_once()
+                start.assert_not_called()
+
     def test_wait_existing_process_returns_output_no_duplicate_start(self):
         server = build_server(self.host)
         request = Command(
@@ -375,7 +396,7 @@ class UnifiedOperationWaitTests(unittest.TestCase):
             "list_folder_page", "read_text_page", "find_files", "search_code",
             "path_info", "read_text_lines", "read_many_text_files",
             "compare_text_files", "read_text_chunk", "sha256_file",
-            "preview_source_create", "preview_source_patch", "tool_catalog",
+            "preview_source_create", "preview_source_patch", "tool_catalog", "activity",
                 "create_directory", "create_file", "move_file", "request_source_patch_dev",
                 "list_processes", "get_config", "send_input",
         })

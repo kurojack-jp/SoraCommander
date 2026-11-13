@@ -166,10 +166,16 @@ class WindowsOwnerController(OwnerController):
 
             stage = 'SECOND_GUI'
             # Both policy.lock and manager._lock are free during the GUI.
-            _authorize_interactive_local(self.host, record.request,
-                                         deadline=min(monotonic() + 45, saved.deadline),
-                                         verify=verify_session,
-                                         before_launch=verify_binding)
+            from .interactive_hooks import InteractiveReviewNoAnswer
+            try:
+                _authorize_interactive_local(self.host, record.request,
+                                             deadline=min(monotonic() + 45, saved.deadline),
+                                             verify=verify_session,
+                                             before_launch=verify_binding)
+            except InteractiveReviewNoAnswer as exc:
+                return {'status': 'TIMED_OUT',
+                        **review_diagnostics('SECOND_GUI', exc.reason, 'EXPIRED', 'NOT_STARTED'),
+                        'auto_retry': False, 'required_action': 'REPORT_AND_WAIT'}
             state, stage = 'SECOND_APPROVED', 'REVALIDATE'
             # Match Host session routing's normal -> DEV manager lock order.
             with policy.lock, saved.normal_manager._lock, saved.manager._lock:

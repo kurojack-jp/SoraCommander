@@ -138,6 +138,7 @@ MODULES = tuple(sorted((
     "broker_host.py",  # transport only; product factory remains unavailable
     "product_composition.py",  # opt-in fail-closed factory, no trust promotion
     "__init__.py",
+    "activity.py",  # data-only observation store; no command content, no launch
     "approval.py",
     "broker_contract.py",
     "broker_dispatch.py",
@@ -155,6 +156,8 @@ MODULES = tuple(sorted((
     "extensions.py",
     "file_reads.py", "git_readonly.py", "image_reads.py",
     "file_edits.py",
+    "file_review_outcome.py",
+    "no_answer.py",
     "edit_review_pilot.py",
     "host.py",
     "host_supervisor.py",

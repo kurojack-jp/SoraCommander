@@ -64,7 +64,19 @@ class LocalApproval:
                 # replay prevention across pruning or process restarts.
                 self._recent.pop(next(iter(self._recent)))
             self._recent[request.request_id] = (record, now)
+            from .activity import publish
+            publish(getattr(self, "_activity_store", None), request_id=request.request_id,
+                    pending_id=record.pending_id, state="PENDING", review_state="PENDING", source="review")
             return record
+
+    def activity_snapshot(self):
+        """Pure logical-window identity snapshot, without pruning or consent."""
+        with self.lock:
+            now = self.clock()
+            return tuple((p.request.request_id, p.pending_id,
+                          p.pending_id in self._pending and now < p.expires_at)
+                         for p, admitted in self._recent.values()
+                         if now < admitted + self._RECENT_SECONDS)
 
     def pending_id_for_request_local(self, request_id: str):
         """Read-only lookup for recent same-Host Owner reviews, not consent.
@@ -105,7 +117,7 @@ def review_diagnostics(stage, reason, approval_state, launch_outcome):
     choices = {
         'stage': {'OWNER_CHECK', 'CONSUME', 'MONITOR', 'SECOND_GUI', 'REVALIDATE', 'LAUNCH', 'FIRST_GUI'},
         'reason': {'AUTHORIZATION_FAILED', 'CONFIRMATION_UNAVAILABLE', 'DENIED', 'APPROVED',
-                   'EXPIRED', 'LAUNCH_NOT_STARTED', 'LAUNCH_UNKNOWN', 'LAUNCH_ACCEPTED'},
+                   'EXPIRED', 'CLOSED', 'LAUNCH_NOT_STARTED', 'LAUNCH_UNKNOWN', 'LAUNCH_ACCEPTED'},
         'approval_state': {'NOT_CONSUMED', 'CONSUMED', 'SECOND_APPROVED', 'REJECTED', 'EXPIRED', 'UNKNOWN'},
         'launch_outcome': {'NOT_STARTED', 'UNKNOWN', 'STARTED'},
     }
@@ -122,6 +134,10 @@ def diagnostic_fields(result):
             ('stage', 'reason', 'approval_state', 'launch_outcome')))
     except (KeyError, ValueError):
         fields = {}
+    if (result.get('status') == 'TIMED_OUT'
+            and result.get('auto_retry') is False
+            and result.get('required_action') == 'REPORT_AND_WAIT'):
+        fields.update(auto_retry=False, required_action='REPORT_AND_WAIT')
     if type(result.get('error')) is str and result['error'] in {'OwnerAuthorizationRequired', 'OwnerConfirmationUnavailable',
                               'LaunchNotStarted', 'LaunchOutcomeUnknown'}:
         fields['error'] = result['error']

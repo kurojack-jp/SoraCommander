@@ -41,6 +41,14 @@ class StdinTests(unittest.TestCase):
         self.guard = Mock(sid='test-owner')
         self.enterContext(patch.object(dev, '_owner', return_value=self.guard))
         self.gui = self.enterContext(patch.object(dev.file_edits, '_show_edit_review', return_value=True))
+        def typed_window(*args, **kwargs):
+            decision = self.gui(*args, **kwargs)
+            if type(decision) is not bool:
+                return decision
+            return dev.file_edits._DevFileReviewOutcome(
+                'APPROVED' if decision else 'REJECT', 'LOCAL_EVENT',
+                kwargs['deadline'], None, kwargs['_review_token'])
+        self.enterContext(patch.object(dev.file_edits, '_show_edit_review_dev', side_effect=typed_window))
 
     def command(self, **kw):
         values = dict(executable=sys.executable, argv=('-I', '-S', '-q', '-i'),
@@ -162,7 +170,7 @@ class StdinTests(unittest.TestCase):
                 self.guard.verify.side_effect = PermissionError()
                 return True
             self.gui.side_effect = lose_owner
-            self.assertEqual(self.observe(self.submit())['status'], 'DENIED')
+            self.assertEqual(self.observe(self.submit())['status'], 'ERROR')
             write.assert_not_called()
         self.manager._jobs.clear()
 
@@ -182,7 +190,7 @@ class StdinTests(unittest.TestCase):
             self.manager.close()
             self.assertLess(monotonic()-started, .5)
             release.set()
-            self.assertEqual(self.observe(result)['status'], 'DENIED')
+            self.assertEqual(self.observe(result)['status'], 'ERROR')
             write.assert_not_called()
         self.manager._jobs.clear()
 

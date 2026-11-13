@@ -22,6 +22,14 @@ class Host:
         self._owner_review_dispatcher = None
         self._dev_interactive_jobs = None
         self._codex_job_reader = None
+        from .activity import ActivityStore
+        self._activity_store = ActivityStore()
+        self.jobs._activity_store = self._activity_store
+        self.approval._activity_store = self._activity_store
+
+    def activity(self, mode="recent", id=None, limit=10, **extra):
+        from .activity import observe
+        return observe(self, dict(mode=mode, id=id, limit=limit, **extra))
 
     def _manager_for_request(self, request):
         if type(request) is not Command:
@@ -89,11 +97,27 @@ class Host:
         return (self.owner, self.policy.roots, self.policy.generation, self.policy.instance_id)
 
     def run_command(self, background=False, *, interactive=False, **payload):
+        result = self._run_command_activity_impl(background, interactive=interactive, **payload)
+        # Observation only: it must never replace or fail the command result.
+        try:
+            from .activity import publish, valid_id
+            if valid_id(result.get("request_id"), 32):
+                publish(self._activity_store, request_id=result.get("request_id"),
+                        pending_id=result.get("pending_id"), session_id=result.get("session_id"),
+                        state=result.get("status"), source="activity_only")
+        except Exception:
+            pass
+        return result
+
+    def _run_command_activity_impl(self, background=False, *, interactive=False, **payload):
         request = None
         try:
             if type(background) is not bool:
                 raise ValueError("background must be a bool")
             request = Command(interactive=interactive, **payload)
+            from .activity import publish
+            publish(self._activity_store, request_id=request.request_id,
+                    state="PENDING", source="activity_only")
             if not background and request.timeout > 30:
                 return {"request_id": request.request_id, "status": "ERROR",
                         "error": "LongCommandRequiresBackground"}
@@ -101,6 +125,7 @@ class Host:
                 decision = self.policy.classify(request, self.owner)
                 manager = self._manager_for_request(request) if (
                     self._dev_interactive_jobs is not None) else self.jobs
+                manager._activity_store = self._activity_store
                 if request.interactive:
                     # Interactive launches only ever narrow an Owner REVIEW.
                     # Any other decision is a plain denial, never an ERROR
@@ -163,6 +188,9 @@ class Host:
                             "status": "DENY_UNPROTECTED_WORKER",
                             "error": "JobManagerRequired"}
                 result = self.jobs.start(request)
+                publish(self._activity_store, request_id=request.request_id,
+                        session_id=result.get("session_id"), state=result.get("status"),
+                        source="activity_only")
             if not background and "session_id" in result:
                 result = self.jobs.wait(result["session_id"])
             return {**result, "decision": decision.value}

@@ -14,8 +14,8 @@ from types import MappingProxyType
 
 # Add or change a locale only with code review and an explicit new digest.
 _LOCALE_FILES = MappingProxyType({
-    "en": ("en.json", "e1cf67b8d8115eca128be0fa18695ef4f42d59dfb422da1d3d4599aea7d4c72f"),
-    "ja": ("ja.json", "95ee3765273a8f43ee029792be2259f726ae1fceb671837b6f63880f3319d935"),
+    "en": ("en.json", "c63e5c7a96084efe80ff54b482330f9dd1f55617e729f9336ae3e881bae5dfc7"),
+    "ja": ("ja.json", "5085d88cdb14decd86d6b118f7dab17e0aa21930ae4378e9a54436f96f38aa15"),
 })
 _SUPPORTED_KEYS = frozenset({
     "window_title", "heading_command", "heading_file_create",
@@ -30,6 +30,8 @@ _SUPPORTED_KEYS = frozenset({
     "body_executable", "body_argv", "body_cwd", "body_timeout",
     "body_output_limit", "body_review_id", "body_expires",
     "body_unknown_effects", "body_not_remote",
+    "pilot_file_caution", "pilot_file_information",
+    "interactive_caution", "interactive_information",
     "heading_file_move", "file_caution", "file_information", "file_operation",
     "file_operation_create", "file_operation_edit", "file_operation_move",
     "file_path", "file_source", "file_destination", "file_size",

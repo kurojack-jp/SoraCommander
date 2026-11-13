@@ -82,9 +82,11 @@ def build_backend_host(guard, repo_root, environ):
                 owner=guard.sid, jobs=jobs)
     host.attach_owner_review_local(OwnerReviewDispatcher(WindowsOwnerController(host)))
     if environ.get("SORA_NEXT_EDIT_PILOT") == "1":
+        from .owner_ui_language import owner_ui_language
         host._edit_review_pilot = EditReviewPilot(
             Path(repo_root) / "tests" / "real_mcp",
-            enable_create=environ.get("SORA_NEXT_CREATE_PILOT") == "1")
+            enable_create=environ.get("SORA_NEXT_CREATE_PILOT") == "1",
+            enable_timeout_dev=True, locale=owner_ui_language())
     return host
 
 

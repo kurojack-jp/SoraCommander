@@ -1,8 +1,8 @@
 """DEV_ONLY / NOT_REGISTERED: one local Owner window for one dev_rdc_compat proposal.
 
-Nothing connected imports this yet. It answers APPROVE, DENY, EXPIRED or ERROR and
-never raises. APPROVE is a local answer only, not a grant: the caller keeps every
-write check. Any doubt gives ERROR or EXPIRED, with no fallback to another window.
+Used by dev_rdc_compat.mutate. No-answer replies reuse the C3/C4 typed proof.
+APPROVE is a local answer only, not a grant: the caller keeps every write check.
+Any doubt gives ERROR, with no fallback to another window.
 """
 import hmac
 import json
@@ -17,6 +17,8 @@ from .owner_file_review_localized_dev_20261104 import bound_proposal
 from .windows_job import WindowsJob
 from .windows_session_events import OwnerSessionEventLatch
 from .owner_dialog_integrity import DIALOG_INTEGRITY
+from .file_review_outcome import _VerifiedFileReviewExpiry
+from hashlib import sha256
 
 DEV_ONLY = True
 NOT_REGISTERED = True
@@ -24,6 +26,9 @@ DIALOG_SCRIPT = Path(__file__).resolve().with_name("owner_file_dialog_localized.
 from .owner_ui_language import owner_ui_language  # same choice as the command window
 MAX_REQUEST = 1048576  # also fixed in the child
 MAX_SECONDS = 45.0
+# The child draws its window and exits inside this grace. Without it the
+# parent gives up first and a true expiry is reported as ERROR (C8, 2026-11-13).
+CHILD_GRACE_SECONDS = 3.0
 
 
 def request_frame(nonce, proposal, seconds, locale=None):
@@ -42,9 +47,8 @@ def request_frame(nonce, proposal, seconds, locale=None):
     return frame
 
 
-def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=None):
+def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=None, review_token=None):
     child = job = latch = None
-    expired = False
     try:
         if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SECONDS:
             raise ValueError("invalid file review time")
@@ -69,42 +73,49 @@ def review_once(guard, proposal, *, seconds=MAX_SECONDS, locale=None):
 
         def collect():
             try:
-                answer["output"], _ = child.communicate(input=payload, timeout=seconds + .5)
+                answer["output"], _ = child.communicate(input=payload, timeout=seconds + CHILD_GRACE_SECONDS)
             except subprocess.TimeoutExpired:
                 answer["timeout"] = True
             except Exception:
                 answer["error"] = True
         reader = Thread(target=collect, daemon=True)
         reader.start()
-        deadline = monotonic() + seconds + .5
+        deadline = monotonic() + seconds + CHILD_GRACE_SECONDS
         while reader.is_alive():
             latch.verify()
             guard.verify()
             guard.verify_process(child.pid)
             reader.join(timeout=0.12)
             if monotonic() >= deadline:
-                expired = True
                 raise PermissionError("Owner confirmation timed out")
         if answer.get("timeout"):
-            expired = True
             raise PermissionError("Owner confirmation timed out")
         if answer.get("error") or "output" not in answer:
             raise PermissionError("Owner UI did not answer")
         output = answer["output"]
         if child.returncode != 0 or len(output) > 512:
             raise PermissionError("invalid Owner dialog exit")
-        response = json.loads(output.decode("ascii"))
+        from .owner_file_dialog_localized import _unique
+        response = json.loads(output.decode("ascii"), object_pairs_hook=_unique)
         if (type(response) is not dict
                 or set(response) != {"nonce", "decision"}
                 or type(response["nonce"]) is not str
                 or not hmac.compare_digest(response["nonce"], nonce)
-                or response["decision"] not in ("APPROVE", "DENY", "EXPIRED")):
+                or response["decision"] not in ("APPROVE", "DENY", "EXPIRED", "CLOSED")):
             raise PermissionError("untrusted dialog response")
         guard.verify()
         latch.verify()
+        if response["decision"] in ("EXPIRED", "CLOSED"):
+            # The integrity-checked child owns timer/event proof; the nonce binds
+            # its reply to this one invocation. This gate has no writer.
+            digest = sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()
+            return _VerifiedFileReviewExpiry(review_token if review_token is not None else nonce,
+                proposal.get("path", proposal.get("source")),
+                proposal.get("old_sha256"), digest, proposal["operation"],
+                reason=response["decision"])
         return response["decision"]
     except Exception:
-        return "EXPIRED" if expired else "ERROR"
+        return "ERROR"
     finally:
         if latch is not None:
             try:
