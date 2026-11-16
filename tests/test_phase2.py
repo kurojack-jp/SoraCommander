@@ -377,7 +377,7 @@ class Phase2Tests(unittest.TestCase):
     def test_fake_adapter_reconnect_registers_no_mutating_approval_or_replay(self):
         registrations = []
         class FakeFastMCP:
-            def __init__(self, name):
+            def __init__(self, name, **kwargs):
                 self.methods = {}
                 registrations.append(self.methods)
             def tool(self):

@@ -269,7 +269,7 @@ class ScaffoldTests(unittest.TestCase):
         registered = {}
 
         class FakeFastMCP:
-            def __init__(self, name):
+            def __init__(self, name, **kwargs):
                 pass
 
             def tool(self):
