@@ -13,7 +13,6 @@ import re
 HELPERS = (
     "Invoke-NextCodexJob.ps1",
     "cli-monitor.ps1",
-    "start-cli-monitor.vbs",
 )
 MAX_HELPER_BYTES = 256 * 1024
 MAX_TOTAL_BYTES = 512 * 1024

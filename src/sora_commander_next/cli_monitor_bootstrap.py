@@ -27,7 +27,6 @@ def _tools_for_module(module_file):
 _TOOLS = _tools_for_module(__file__)
 _WRAPPER = _TOOLS / "Invoke-NextCodexJob.ps1"
 _MONITOR = _TOOLS / "cli-monitor.ps1"
-_LAUNCHER = _TOOLS / "start-cli-monitor.vbs"
 
 
 def _system_executable(*components, windows_root=None):
@@ -96,13 +95,15 @@ def ensure_monitor_for_approved_job(request):
     # The release inventory currently includes Python only. Until a trusted,
     # signed tool bundle is installed beside the package, an exact CLI-monitor
     # request must fail closed rather than launching a missing/foreign wrapper.
-    if not (_WRAPPER.is_file() and _MONITOR.is_file() and _LAUNCHER.is_file()):
+    if not (_WRAPPER.is_file() and _MONITOR.is_file()):
         raise RuntimeError("CLI monitor files missing")
     if monitor_running():
         return
     # Spawned by Host, NOT by the CLI job. Host itself is not in the job object.
     subprocess.Popen(
-        [_system_executable("wscript.exe"), "//B", "//Nologo", str(_LAUNCHER)],
+        [_system_executable("WindowsPowerShell", "v1.0", "powershell.exe"),
+         "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+         "-File", str(_MONITOR)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, close_fds=True,
         creationflags=subprocess.CREATE_NO_WINDOW)

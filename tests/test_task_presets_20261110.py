@@ -196,7 +196,11 @@ class StartupTests(unittest.TestCase):
     def test_usual_mode_checks_the_file_at_startup(self):
         source = (Path(__file__).resolve().parents[1] / "src" / "sora_commander_next"
                   / "stdio_main.py").read_text(encoding="utf-8")
-        self.assertIn("task_presets = load_task_presets(os.environ)", source)
+        # The shared pilot composition reads the process environment unless a
+        # local caller passes its own mapping; main() passes none.
+        self.assertIn("environ = os.environ if environ is None else environ", source)
+        self.assertIn("serve_stdio(build_owner_pilot_host())", source)
+        self.assertIn("task_presets = load_task_presets(environ)", source)
         self.assertIn('print(f"[HOLD] tasks.json: {error}", file=sys.stderr', source)
         self.assertIn("host.task_presets = task_presets", source)
 

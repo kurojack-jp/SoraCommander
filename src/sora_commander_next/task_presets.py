@@ -133,6 +133,11 @@ def load_task_presets(environ=None):
             data = stream.read(MAX_TASKS_BYTES + 1)
     except OSError:
         raise TaskPresetError("file could not be read") from None
+    return parse_task_presets(data)
+
+
+def parse_task_presets(data):
+    """Validate candidate bytes; also used by the startup file loader."""
     if len(data) > MAX_TASKS_BYTES:
         raise TaskPresetError("file is larger than 64 KiB")
     try:

@@ -37,6 +37,12 @@ Sora Commander is an MCP server for Windows. It connects to ChatGPT through Open
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
 
+## New in v0.1.9
+
+- **Config Builder** (`tools\scn_config_builder.py`): an optional offline window for editing `allowed-roots.txt`, `language.txt` and `tasks.json` instead of writing them by hand. It checks your draft with the same code the Host uses at startup, shows the full contents before saving, backs up changed files and checks the saved files again. New folders start read-only. It never runs a task preset. See [docs/config-builder.md](docs/config-builder.md). The window itself has been tested with automated tests only, not yet by hand on real machines.
+- The help for `activity`, `request_status`, `review_status` and `await_command_result` now starts by saying when to use each one. No tool was added or removed.
+- **After updating, restart the Broker and its client, then refresh the tools in ChatGPT** so it sees the new help. Do the same restart after saving settings with Config Builder; settings are read only at startup.
+
 ## New in v0.1.7
 
 - Approval windows now distinguish Reject (`DENIED`) from no decision: X gives `TIMED_OUT`, `reason=CLOSED`; no answer in time gives `TIMED_OUT`, `reason=EXPIRED`. **X changed meaning: before this version, closing the window counted as a reject.** No decision means nothing ran or was written; ChatGPT reports and waits for your next instruction, without resubmitting or asking for the window again. A no-answer result is not a refusal or proof that you were away. Time limits are unchanged. Live-checked on 2026-11-13 with real windows through ChatGPT in Broker mode: command windows (Approve, Reject, X, no answer) and `create_file` (X, Approve). Other paths behave the same way in tests but have not been checked with real windows: no answer for `create_file` and the other DEV file tools, DEV `send_input`, the interactive second window, the text edit/create pilot, `run_task` and `ogf_cue`. These DEV checks do not establish production acceptance. See the INSTALL guide for scope and uncertain outcomes.
@@ -154,6 +160,12 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+## v0.1.9 の新機能
+
+- **Config Builder**（`tools\scn_config_builder.py`）：`allowed-roots.txt`・`language.txt`・`tasks.json`を手で書く代わりに画面で編集できる、任意のオフラインツールです。下書きはHostが起動時に使うのと同じコードで確認し、保存前に全文を表示し、変更するファイルをバックアップして、保存後にもう一度確認します。新しく追加したフォルダは「読むだけ」から始まります。タスクプリセットを実行することはありません。[docs/config-builder.ja.md](docs/config-builder.ja.md)を参照してください。画面そのものは自動テストだけで確認しており、実機での手動確認はまだです。
+- `activity`・`request_status`・`review_status`・`await_command_result`のヘルプの冒頭に、それぞれをいつ使うかを書きました。ツールの追加・削除はありません。
+- **更新後はBrokerとそのクライアントを再起動し、その後ChatGPTのツールを再読み込みしてください。** 新しいヘルプが反映されます。Config Builderで設定を保存したあとも同じく再起動してください。設定は起動時にだけ読み込まれます。
 
 ## v0.1.7 の新機能
 

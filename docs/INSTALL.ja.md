@@ -47,6 +47,8 @@ powershell -ExecutionPolicy Bypass -File tools\Set-NextTunnelKey.ps1
 
 ### 自分のプロジェクトのフォルダを許可する
 
+v0.1.9から、このファイルと`language.txt`・`tasks.json`は、手で書く代わりに任意のConfig Builderの画面でも作成・編集できます（`py -3.13 -B tools\scn_config_builder.py`）。Hostが起動時に使うのと同じコードで内容を確認します。[docs/config-builder.ja.md](docs/config-builder.ja.md)を参照してください。以下の決まりはそのまま適用されます。
+
 ChatGPTのファイル操作ツールで自分のプロジェクトを扱う場合は、`%USERPROFILE%\.config\sora-commander\allowed-roots.txt`を手元で作成します。UTF-8で、1行に1つのローカルフォルダの絶対パスを書きます。引用符で囲まず、環境変数も使わないでください。
 
 ```text

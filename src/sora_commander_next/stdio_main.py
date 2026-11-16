@@ -139,6 +139,16 @@ def main():
         serve_stdio(Host())
         return
 
+    serve_stdio(build_owner_pilot_host())
+
+
+def build_owner_pilot_host(repo_root=None, *, environ=None, profile=None,
+                           journal_enabled=None, result_enabled=None,
+                           edit_enabled=None, create_enabled=None):
+    """Shared local pilot composition; importing it neither starts nor serves."""
+    import os
+    environ = os.environ if environ is None else environ
+
     from pathlib import Path
     from .policy import Policy
     from .windows_owner import OwnerSessionGuard
@@ -147,12 +157,12 @@ def main():
 
     guard = OwnerSessionGuard()
     guard.verify()
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[2] if repo_root is None else Path(repo_root)
     # Explicit local dev profile. No remotely chosen paths or implicit grants.
     # The existing default keeps the original tests-only scope.
-    profile = os.environ.get("SORA_NEXT_OWNER_PROFILE", "tests")
+    profile = environ.get("SORA_NEXT_OWNER_PROFILE", "tests") if profile is None else profile
     try:
-        roots = startup_allowed_roots(repo_root, profile, os.environ)
+        roots = startup_allowed_roots(repo_root, profile, environ)
     except AllowedRootsError as error:
         import sys
         print(f"[HOLD] {error}", file=sys.stderr, flush=True)
@@ -166,14 +176,14 @@ def main():
         raise SystemExit(2) from None
     from .task_presets import TaskPresetError, load_task_presets
     try:
-        task_presets = load_task_presets(os.environ)
+        task_presets = load_task_presets(environ)
     except TaskPresetError as error:
         import sys
         print(f"[HOLD] tasks.json: {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
     from .ogf_cue import OgfBridgeError, load_ogf_bridge
     try:
-        ogf_bridge = load_ogf_bridge(os.environ)
+        ogf_bridge = load_ogf_bridge(environ)
         if ogf_bridge is not None:
             ogf_bridge.startup()
     except (OgfBridgeError, OSError, RuntimeError, ValueError):
@@ -181,8 +191,10 @@ def main():
         print('[HOLD] ogf-bridge.json: configuration or protected storage unavailable', file=sys.stderr, flush=True)
         raise SystemExit(2) from None
     jobs = None
-    journal_enabled = os.environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"
-    result_enabled = os.environ.get("SORA_NEXT_RESULT_ARCHIVE_PILOT") == "1"
+    journal_enabled = (environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"
+                       if journal_enabled is None else journal_enabled)
+    result_enabled = (environ.get("SORA_NEXT_RESULT_ARCHIVE_PILOT") == "1"
+                      if result_enabled is None else result_enabled)
     if result_enabled and not journal_enabled:
         raise RuntimeError("Owner result archive requires journal opt-in")
     if journal_enabled:
@@ -199,15 +211,18 @@ def main():
     host.task_presets = task_presets
     host.ogf_bridge = ogf_bridge
     # Explicit secondary opt-in; disposable tests/real_mcp files only.
-    if os.environ.get('SORA_NEXT_EDIT_PILOT') == '1':
+    edit_enabled = (environ.get('SORA_NEXT_EDIT_PILOT') == '1'
+                    if edit_enabled is None else edit_enabled)
+    if edit_enabled:
         from .edit_review_pilot import EditReviewPilot
         # Creation needs its own explicit local opt-in in addition to the edit pilot.
         # No remote MCP argument can grant it; default remains disabled.
-        enable_create = os.environ.get('SORA_NEXT_CREATE_PILOT') == '1'
+        enable_create = (environ.get('SORA_NEXT_CREATE_PILOT') == '1'
+                         if create_enabled is None else create_enabled)
         host._edit_review_pilot = EditReviewPilot(
             repo_root / 'tests' / 'real_mcp', enable_create=enable_create,
             enable_timeout_dev=True, locale=language)
-    serve_stdio(host)
+    return host
 
 
 if __name__ == "__main__":

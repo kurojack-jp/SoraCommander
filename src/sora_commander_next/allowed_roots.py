@@ -129,6 +129,23 @@ def _parse_roots(text, home, blocked, contained):
     return AllowedRoots(tuple(full), tuple(read_only))
 
 
+def parse_allowed_roots(data, environ=None):
+    """Validate candidate bytes using the same local scope rules as startup."""
+    environ = os.environ if environ is None else environ
+    try:
+        home, _, blocked, contained = _locations(environ)
+    except (OSError, ValueError, KeyError, RuntimeError):
+        raise AllowedRootsError(0, "configuration unavailable or invalid") from None
+    if len(data) > MAX_CONFIG_BYTES:
+        raise AllowedRootsError(0, "configuration too large")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        line = data[:error.start].count(b"\n") + 1
+        raise AllowedRootsError(line, "invalid UTF-8") from None
+    return _parse_roots(text, home, blocked, contained)
+
+
 def startup_allowed_roots(repo_root, profile, environ=None):
     """Read once per Host composition; return an immutable validated snapshot.
 
@@ -164,14 +181,7 @@ def startup_allowed_roots(repo_root, profile, environ=None):
         _plain_path(config, directory=False)
         with config.open("rb") as stream:
             data = stream.read(MAX_CONFIG_BYTES + 1)
-        if len(data) > MAX_CONFIG_BYTES:
-            raise AllowedRootsError(0, "configuration too large")
-        try:
-            text = data.decode("utf-8-sig")
-        except UnicodeDecodeError as error:
-            line = data[:error.start].count(b"\n") + 1
-            raise AllowedRootsError(line, "invalid UTF-8") from None
-        return _parse_roots(text, home, blocked, contained)
+        return parse_allowed_roots(data, environ)
     except AllowedRootsError:
         raise
     except (OSError, ValueError, KeyError, RuntimeError):

@@ -345,7 +345,10 @@ def _await_submitted_edit_data_only(pilot, initial, wait_seconds):
     return _await_edit_data_only(pilot, pending_id, wait_seconds)
 
 
-def build_server(host: Host, *, approved_icon_path=None, approved_icon_sha256=None):
+def build_server(host: Host, *, approved_icon_path=None, approved_icon_sha256=None,
+                 dev_writes_enabled=True):
+    if type(dev_writes_enabled) is not bool:
+        raise ValueError("explicit boolean DEV write selection required")
     # Never accept icon path/URI over MCP wire. Local release setup supplies
     # both the PNG and an independently trusted hash; both or neither.
     if (approved_icon_path is None) != (approved_icon_sha256 is None):
@@ -514,7 +517,9 @@ DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no 
     @tool_decorator()
     def await_command_result(pending_id: Annotated[str, Field(description='Opaque ID returned by a prior Owner review; required to observe the SAME request, never fabricate or resubmit. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')],
                              wait_seconds: Annotated[float, Field(description='Bounded observer wait in seconds, 0 to 90; default 50. PENDING means observation is incomplete; continue the SAME pending_id with the existing status/wait tool.')] = 50.0) -> dict[str, Any]:
-        """Wait for an existing Owner decision/job, without another execution.
+        """Use to wait 0 to 90 seconds (default 50) for an existing command review or its job result, using its pending_id, not a request_id or session_id. Also observes an existing DEV send_input pending_id. PENDING cannot establish review expiry or completion; continue observing the same pending_id. It cannot discover IDs or establish complete history; use activity to find known IDs, request_status(request_id) for a non-waiting request check, or review_status(pending_id) for a non-waiting review check.
+
+Wait for an existing Owner decision/job, without another execution.
 
 DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED for commands or write_outcome=NOT_STARTED for input, nothing ran / no input was sent. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         return host.await_command_result(pending_id, wait_seconds=wait_seconds)
@@ -540,7 +545,9 @@ DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no 
         id: Annotated[str | None, Field(description="Null for recent; required for lookup: exactly 32 or 48 lowercase hex, without normalization. Legacy internal IDs, input_id, OGF identities, Codex job IDs and wire IDs are excluded. Keep the original IDs. request_status takes request_id; review_status takes command/input pending_id; edit_review_status takes edit/create pending_id only when registered. list_sessions and recovery_overview take no IDs. recovery_overview is a separate read and retains its Owner-verified private archive boundary; activity never calls it.")] = None,
         limit: Annotated[int, Field(description="Strict integer 1..20 for recent, default 10; lookup requires 10. No coercion, bool, null, extras or invalid mode combinations. Reply: status/mode/scope/query_id/id_kind/records/count/truncated/error/next_tool/next_args/required_action/auto_retry. Each record: operation_type, labelled request_id/pending_id/session_id, state/review_state/job_state/state_source, created_at/updated_at/finished_at, time_basis=PRODUCER_EVENT and route/action/auto_retry=false. At most 20 rows and 32768 UTF-8 JSON bytes. No retained rows does not mean no operations. Cached expired sources give OUTCOME_UNKNOWN; collisions AMBIGUOUS. Failures require report and wait; no automatic retry.")] = 10,
     ) -> dict[str, Any]:
-        """Read-only, no Owner window. Resolve existing labelled IDs or list the
+        """Use to find recent operations, identify a labelled ID kind, and choose the next read tool; returns without waiting. Use recent with no ID, or lookup with an existing 32/48-lowercase-hex request_id, pending_id or session_id; legacy IDs, input_id, OGF identities, Codex job IDs and wire IDs are excluded. This bounded current-process view cannot establish complete history or exact OS execution times; follow the returned next_tool and next_args for further observation.
+
+Read-only, no Owner window. Resolve existing labelled IDs or list the
         newest admissions in this current execution process (Broker lifetime in
         Broker mode), not prior journals, archives or arbitrary tool-call history.
         recent: id=null, strict integer limit 1..20 (default 10). lookup: id is
@@ -573,14 +580,18 @@ TIMED_OUT is terminal and routes to REPORT_AND_WAIT with no next tool; report an
 
     @tool_decorator()
     def review_status(pending_id: Annotated[str, Field(description='Existing 32-hex pending_id from an Owner command review or DEV_ONLY send_input; NOT the request_id or input_id. Read-only; never fabricate or resubmit. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')]) -> dict[str, Any]:
-        """Read-only observation using an existing pending_id: returns the stored Owner command approval/launch result, or the DEV_ONLY send_input input outcome when the ID belongs to stdin input. Does not approve, launch, send input or rerun. For command reviews, RUNNING / LAUNCH_ACCEPTED may remain after the job has COMPLETED: this is NOT the current job state. Use request_status(request_id) or await_process_output(session_id) for the job. For send_input, observe its original pending_id, not the command launch, and never send the input again.
+        """Use to check an existing Owner command review or DEV send_input outcome without waiting, using its pending_id, not a request_id, session_id or input_id. This reads the stored review/launch or input result, so it cannot establish the current command job state; use request_status(request_id) or await_process_output(session_id) for that state. Use await_command_result(pending_id) for a bounded wait on the existing review or job.
+
+Read-only observation using an existing pending_id: returns the stored Owner command approval/launch result, or the DEV_ONLY send_input input outcome when the ID belongs to stdin input. Does not approve, launch, send input or rerun. For command reviews, RUNNING / LAUNCH_ACCEPTED may remain after the job has COMPLETED: this is NOT the current job state. Use request_status(request_id) or await_process_output(session_id) for the job. For send_input, observe its original pending_id, not the command launch, and never send the input again.
 
 DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED for commands or write_outcome=NOT_STARTED for input, nothing ran / no input was sent. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         return host.review_status(pending_id)
 
     @tool_decorator()
     def request_status(request_id: Annotated[str, Field(description='REQUIRED original request correlation ID (32 lowercase hex characters); NOT Owner permission. TIMED_OUT (EXPIRED/CLOSED) is terminal: REPORT_AND_WAIT; never resubmit or ask for the window again. See tool help for outcome handling.')]) -> dict[str, Any]:
-        """Read-only lookup by the original caller's request ID.
+        """Use to check an existing request without waiting, using the caller's original 32-lowercase-hex request_id, not a pending_id or session_id. Returns the current job record when found, otherwise the correlated stored review result. UNKNOWN cannot establish that nothing ran; use activity lookup to identify known IDs and follow its suggested read tool for reconciliation, or review_status(pending_id) to inspect a known review.
+
+Read-only lookup by the original caller's request ID.
 
 DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no decision: reason=EXPIRED (nobody answered in time) or reason=CLOSED (window closed); launch_outcome=NOT_STARTED, nothing ran. The original review is over: REPORT_AND_WAIT, report it and wait for the Owner's next instruction; never resubmit, send a new request for it, or ask for the window again. ERROR with NOT_STARTED means the answer could not be confirmed and nothing started: report and wait. OUTCOME_UNKNOWN / UNKNOWN means effects uncertain: manual reconciliation, never replay. On PENDING follow the same pending_id via review_status/await_command_result: PENDING is observer wait only. Interactive SECOND_GUI Reject retains ERROR/OwnerAuthorizationRequired with launch_outcome=NOT_STARTED; report and wait."""
         return host.request_status(request_id)
@@ -736,6 +747,8 @@ DENIED means the Owner pressed Reject. TIMED_OUT means the review ended with no 
                 return {"status": "DENIED", "error": "DevInputDenied", "retry_allowed": False}
 
         def dev_mutate(operation, **arguments):
+            if not dev_writes_enabled:
+                return {"status": "DENY", "error": "DevWritesDisabled", "write_outcome": "NOT_STARTED"}
             if dev_client:
                 return host.dev_mutate(operation, **arguments)
             with host.policy.lock:

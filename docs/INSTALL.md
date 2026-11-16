@@ -51,6 +51,12 @@ Copy [sora-next.example.yaml](sora-next.example.yaml) to `%USERPROFILE%\.config\
 
 ### Allow your project folders
 
+From v0.1.9 you can also create and edit this file, `language.txt` and
+`tasks.json` in the optional Config Builder window instead of by hand:
+`py -3.13 -B tools\scn_config_builder.py`. It checks them with the same code
+the Host uses at startup. See [docs/config-builder.md](docs/config-builder.md).
+The rules below still apply.
+
 Create `%USERPROFILE%\.config\sora-commander\allowed-roots.txt` by hand if you
 want ChatGPT's file tools to reach your projects. Use UTF-8, one absolute local
 folder path per line, without quotes or environment-variable substitution:
