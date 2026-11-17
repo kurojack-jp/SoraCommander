@@ -139,13 +139,25 @@ def main():
         serve_stdio(Host())
         return
 
-    serve_stdio(build_owner_pilot_host())
+    from .owner_journal_lease import OwnerJournalLeaseError, owner_journal_lease
+    try:
+        with owner_journal_lease(os.environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"):
+            # serve_stdio closes the Host in its own finally, before returning.
+            serve_stdio(build_owner_pilot_host())
+    except OwnerJournalLeaseError as error:
+        import sys
+        print(f"[HOLD] {error}; stdio pilot not started.", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
 
 
 def build_owner_pilot_host(repo_root=None, *, environ=None, profile=None,
                            journal_enabled=None, result_enabled=None,
                            edit_enabled=None, create_enabled=None):
-    """Shared local pilot composition; importing it neither starts nor serves."""
+    """Shared local composition; journal-enabled callers must hold a lifetime lease.
+
+    The stdio and exec entry points own that lease around construction and serving.
+    Keeping it outside this builder avoids event-loop/thread cleanup ownership.
+    """
     import os
     environ = os.environ if environ is None else environ
 

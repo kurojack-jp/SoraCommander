@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -53,6 +53,7 @@ class OwnerResultArchiveOptInTests(unittest.TestCase):
                  patch.object(stdio_main, "owner_journal_path",
                               return_value=base) as owner_path, \
                  patch.object(stdio_main, "Host", FakeHost), \
+                 patch("sora_commander_next.owner_journal_lease._new_lease", return_value=MagicMock()), \
                  patch.object(stdio_main, "serve_stdio") as serve, \
                  patch("sora_commander_next.windows_owner.OwnerSessionGuard",
                        FakeGuard), \

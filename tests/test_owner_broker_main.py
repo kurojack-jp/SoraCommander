@@ -4,6 +4,8 @@ Only actions that open no window are sent: reads, and a command the policy
 denies before review. The journal switches stay off, so AppData is not used.
 """
 import asyncio
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+import io
 import os
 from pathlib import Path
 import secrets
@@ -13,12 +15,80 @@ import unittest
 import ctypes
 import time
 from ctypes import wintypes
+from unittest.mock import patch
 
 from tests._inherited_test_temp import inherited_test_temp
+from tests._test_owner_lease import new_test_prefix
 
 ROOT = Path(__file__).resolve().parents[1]
 RID = "1" * 32
 EXE = r"C:\Windows\System32\where.exe"
+
+
+@unittest.skipUnless(os.name == "nt", "Windows Broker entry point")
+class OwnerBrokerPipeNameTests(unittest.TestCase):
+    def test_bad_overrides_stop_before_guard_lease_or_storage(self):
+        from sora_commander_next import owner_broker_main as broker
+        prefix = "\\\\.\\pipe\\SoraCommanderNext-"
+        bad_names = ("\\\\.\\pipe\\Other-Broker", prefix, prefix + "..",
+                     prefix + "Test\\child", prefix + "x" * 97, "")
+        for name in bad_names:
+            for switches in ([], ["--list-unknown"], ["--resolve-unknown", "X"]):
+                with self.subTest(name=name, switches=switches), ExitStack() as stack:
+                    for target in ("OwnerSessionGuard", "owner_journal_lease",
+                                   "ensure_owner_storage", "LaunchLedger",
+                                   "build_backend_host", "broker_is_running"):
+                        stack.enter_context(patch.object(
+                            broker, target, side_effect=AssertionError(target + " called")))
+                    stack.enter_context(patch.object(
+                        broker.sys.stdin, "isatty",
+                        side_effect=AssertionError("piped-input check called")))
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    stack.enter_context(redirect_stdout(stdout))
+                    stack.enter_context(redirect_stderr(stderr))
+                    self.assertEqual(broker.main(["--pipe-name", name] + switches), 2)
+                    self.assertEqual(stdout.getvalue(),
+                        "[HOLD] --pipe-name must be a Sora Commander pipe name. "
+                        "Broker not started.\n")
+                    self.assertEqual(stderr.getvalue(), "")
+
+    def test_good_override_reaches_mocked_lease_in_all_modes(self):
+        from sora_commander_next import owner_broker_main as broker
+        name = "\\\\.\\pipe\\SoraCommanderNext-Test-" + "a" * 24
+        for switches in ([], ["--list-unknown"], ["--resolve-unknown", "X"]):
+            with self.subTest(switches=switches), ExitStack() as stack:
+                guard = stack.enter_context(patch.object(broker, "OwnerSessionGuard"))
+                lease = stack.enter_context(patch.object(
+                    broker, "owner_journal_lease",
+                    side_effect=broker.OwnerJournalLeaseError("synthetic lease refusal")))
+                stack.enter_context(patch.object(broker.sys.stdin, "isatty", return_value=True))
+                for target in ("ensure_owner_storage", "LaunchLedger", "build_backend_host",
+                               "broker_is_running", "_run_with_lease"):
+                    stack.enter_context(patch.object(
+                        broker, target, side_effect=AssertionError(target + " called")))
+                stdout = stack.enter_context(redirect_stdout(io.StringIO()))
+                self.assertEqual(broker.main(["--pipe-name", name] + switches), 6)
+                guard.assert_called_once_with()
+                guard.return_value.verify.assert_called_once_with()
+                lease.assert_called_once_with()
+                self.assertEqual(stdout.getvalue(),
+                    "[HOLD] synthetic lease refusal; Broker not started.\n")
+
+    def test_public_validator_preserves_current_pipe_names_and_tail_limits(self):
+        from sora_commander_next.owner_broker_pipe import (
+            _valid_name, broker_pipe_name, valid_broker_pipe_name)
+        prefix = "\\\\.\\pipe\\SoraCommanderNext-"
+        self.assertIs(_valid_name, valid_broker_pipe_name)
+        for name in (broker_pipe_name("S-1-5-21-1-2-3-1001", 1),
+                     prefix + "Test-" + "a" * 24,
+                     prefix + "Absent-" + "b" * 24, prefix + "X",
+                     prefix + "Az09-" + "x" * 91):
+            with self.subTest(name=name):
+                self.assertTrue(valid_broker_pipe_name(name))
+        for name in (prefix, prefix + "x" * 97, prefix + "..", prefix + "Test\\child",
+                     "\\\\.\\pipe\\Other-Broker", "", None, 1):
+            with self.subTest(name=name):
+                self.assertFalse(valid_broker_pipe_name(name))
 
 
 def _guard_or_none():
@@ -35,12 +105,14 @@ class OwnerBrokerMainTests(unittest.TestCase):
         from sora_commander_next.mcp_adapter import build_server
         from sora_commander_next.owner_broker_client_main import build_client_host
         from sora_commander_next.windows_owner import OwnerSessionGuard
+        self.lease_prefix = new_test_prefix()
         self.name = "\\\\.\\pipe\\SoraCommanderNext-Test-" + secrets.token_hex(12)
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("SORA_NEXT_")}
         env.update(PYTHONPATH=str(ROOT / "src"), SORA_NEXT_OWNER_PROFILE="tests")
         self.child = subprocess.Popen(
-            [sys.executable, "-B", "-m", "sora_commander_next.owner_broker_main",
+            [sys.executable, "-B", "-m", "tests._owner_broker_main_test_entry",
+             self.lease_prefix,
              "--pipe-name", self.name],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=env, cwd=str(ROOT))
@@ -100,12 +172,13 @@ class OwnerBrokerMainTests(unittest.TestCase):
                if not key.startswith("SORA_NEXT_")}
         env.update(PYTHONPATH=str(ROOT / "src"), SORA_NEXT_OWNER_PROFILE="tests")
         result = subprocess.run(
-            [sys.executable, "-B", "-m", "sora_commander_next.owner_broker_main",
+            [sys.executable, "-B", "-m", "tests._owner_broker_main_test_entry",
+             self.lease_prefix,
              "--pipe-name", self.name],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=30,
             cwd=str(ROOT))
-        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-        self.assertIn("[HOLD]", result.stdout)
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertIn("Owner journal", result.stdout)
         self.assertEqual(self.call("status")["status"], "OK")
 
     def test_ledger_commands_refuse_while_a_broker_runs(self):
@@ -115,11 +188,15 @@ class OwnerBrokerMainTests(unittest.TestCase):
         for arguments in (["--list-unknown"], ["--resolve-unknown", RID]):
             with self.subTest(arguments=arguments):
                 result = subprocess.run(
-                    [sys.executable, "-B", "-m", "sora_commander_next.owner_broker_main",
+                    [sys.executable, "-B", "-m", "tests._owner_broker_main_test_entry",
+                     self.lease_prefix,
                      "--pipe-name", self.name, *arguments],
                     stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
                     timeout=30, cwd=str(ROOT))
-                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                # Both maintenance commands now take the Owner journal lease first,
+                # which the running test Broker holds. (On Windows a DEVNULL stdin
+                # reports isatty() True, so --resolve-unknown reaches the lease too.)
+                self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
                 self.assertIn("[HOLD]", result.stdout)
 
     def test_piped_yes_cannot_clear_a_launch(self):
@@ -127,7 +204,8 @@ class OwnerBrokerMainTests(unittest.TestCase):
                if not key.startswith("SORA_NEXT_")}
         env.update(PYTHONPATH=str(ROOT / "src"))
         result = subprocess.run(
-            [sys.executable, "-B", "-m", "sora_commander_next.owner_broker_main",
+            [sys.executable, "-B", "-m", "tests._owner_broker_main_test_entry",
+             self.lease_prefix,
              "--pipe-name", self.name, "--resolve-unknown", RID],
             input="yes\n", capture_output=True, text=True, env=env, timeout=30,
             cwd=str(ROOT))

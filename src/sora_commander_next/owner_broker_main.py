@@ -11,10 +11,12 @@ from pathlib import Path
 import sys
 import time
 
+from .owner_journal_lease import OwnerJournalLeaseError, owner_journal_lease
 from .edit_review_pilot import EditReviewPilot
 from .host import Host
 from .owner_broker_dev import OwnerBrokerBackend
-from .owner_broker_pipe import OwnerBrokerPipeServer, broker_pipe_name
+from .owner_broker_pipe import (OwnerBrokerPipeServer, broker_pipe_name,
+                                valid_broker_pipe_name)
 from .owner_broker_service import OwnerBrokerService
 from .owner_launch_ledger import DurableJobManager, LaunchLedger, LaunchLedgerError
 from .owner_review_dispatch import OwnerReviewDispatcher
@@ -31,6 +33,7 @@ LEDGER_NAME = "owner-launch-ledger.sqlite"
 
 def broker_is_running(pipe_name):
     """A running Broker's jobs look unresolved from here, so never act beside one."""
+    # main has checked the override; otherwise this is the generated default name.
     prefix = chr(92) * 2 + "." + chr(92) + "pipe" + chr(92)
     return pipe_name[len(prefix):] in os.listdir(prefix)
 
@@ -98,6 +101,10 @@ def main(argv=None):
     parser.add_argument("--resolve-unknown", metavar="REQUEST_ID",
                         help="clear one unknown launch after a typed yes, then exit")
     arguments = parser.parse_args(argv)
+    if arguments.pipe_name is not None and not valid_broker_pipe_name(arguments.pipe_name):
+        print("[HOLD] --pipe-name must be a Sora Commander pipe name. Broker not started.",
+              flush=True)
+        return 2
     guard = OwnerSessionGuard()
     guard.verify()
     repo_root = Path(__file__).resolve().parents[2]
@@ -105,6 +112,16 @@ def main(argv=None):
         print("[HOLD] Type the answer at a console. Piped input cannot clear a launch.",
               flush=True)
         return 3
+    try:
+        with owner_journal_lease():
+            return _run_with_lease(arguments, guard, repo_root)
+    except OwnerJournalLeaseError as error:
+        print(f"[HOLD] {error}; Broker not started.", flush=True)
+        return 6
+
+
+def _run_with_lease(arguments, guard, repo_root):
+    """Called only while main holds the Owner-logon lease (maintenance included)."""
     if arguments.list_unknown or arguments.resolve_unknown:
         if broker_is_running(arguments.pipe_name or broker_pipe_name(
                 guard.sid, guard._identity.session_id)):
@@ -132,36 +149,42 @@ def main(argv=None):
     except LaunchLedgerError:
         print("[HOLD] The launch ledger could not be opened. Nothing was started.", flush=True)
         return 5
-    ledger = getattr(host.jobs, "_ledger", None)
-    if ledger is not None and ledger.unresolved():
-        print(f"[WARN] {len(ledger.unresolved())} earlier launch(es) have an unknown outcome. "
-              "The same commands stay refused until cleared with --resolve-unknown.", flush=True)
-    name = arguments.pipe_name or broker_pipe_name(guard.sid, guard._identity.session_id)
-    server = OwnerBrokerPipeServer(owner_guard=guard,
-                                   service=OwnerBrokerService(OwnerBrokerBackend(host)),
-                                   pipe_name=name)
+    server = None
+    stopped = False
     try:
-        server.start()
-    except OSError:
-        host.close()
-        print("[HOLD] The Broker pipe could not be created. Is another Broker running?",
+        ledger = getattr(host.jobs, "_ledger", None)
+        if ledger is not None and ledger.unresolved():
+            print(f"[WARN] {len(ledger.unresolved())} earlier launch(es) have an unknown outcome. "
+                  "The same commands stay refused until cleared with --resolve-unknown.", flush=True)
+        name = arguments.pipe_name or broker_pipe_name(guard.sid, guard._identity.session_id)
+        server = OwnerBrokerPipeServer(owner_guard=guard,
+                                       service=OwnerBrokerService(OwnerBrokerBackend(host)),
+                                       pipe_name=name)
+        try:
+            server.start()
+        except OSError:
+            print("[HOLD] The Broker pipe could not be created. Is another Broker running?",
+                  flush=True)
+            return 3
+        print("[READY] Owner Broker is running. DEV only. Press Ctrl+C here to stop it.",
               flush=True)
-        return 3
-    print("[READY] Owner Broker is running. DEV only. Press Ctrl+C here to stop it.",
-          flush=True)
-    print(f"[INFO] Allowed folders: {len(host.policy.roots)} full, "
-          f"{len(host.policy.read_only_roots)} read-only for file tools", flush=True)
-    print(f"[INFO] Window language: {language} ("
-          f"{'language.txt' if owner_ui_language_source() == 'file' else 'Windows setting'})",
-          flush=True)
-    try:
-        for _ in sys.stdin:
-            pass  # Only end of input or Ctrl+C stops the Broker.
-    except KeyboardInterrupt:
-        pass
+        print(f"[INFO] Allowed folders: {len(host.policy.roots)} full, "
+              f"{len(host.policy.read_only_roots)} read-only for file tools", flush=True)
+        print(f"[INFO] Window language: {language} ("
+              f"{'language.txt' if owner_ui_language_source() == 'file' else 'Windows setting'})",
+              flush=True)
+        try:
+            for _ in sys.stdin:
+                pass  # Only end of input or Ctrl+C stops the Broker.
+        except KeyboardInterrupt:
+            pass
     finally:
-        stopped = server.stop()
-        host.close()
+        try:
+            if server is not None:
+                # Drain listener threads before releasing the process-wide journal lease.
+                stopped = server.stop(timeout=None)
+        finally:
+            host.close()
     print("[STOPPED] Owner Broker stopped." if stopped
           else "[HOLD] A request was still running when the Broker stopped.", flush=True)
     return 0 if stopped else 4

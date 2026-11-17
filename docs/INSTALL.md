@@ -8,6 +8,14 @@ PC, a separate Windows-user setup and paths with non-ASCII characters (including
 Japanese) remain untested. This limited trial is not production acceptance.
 If a step does not match what you see, please open an issue. Do not include your key.
 
+For the optional [read-only Muse bridge](muse-bridge.md), use Tailscale on this
+Windows PC and put the agent's node in the same tailnet; the PC must stay on.
+Commands are refused and no approval window opens from the bridge. Tested on
+the author's own setup only; whether another account's Muse can join its own
+tailnet the same way is not yet confirmed. Muse is a Meta product; this project
+is not affiliated with or endorsed by Meta. As of November 2026, ChatGPT and
+Muse plan terms can change.
+
 ## 1. Get the code and Python packages
 
 Use a folder only you can write to, with **no spaces anywhere in the checkout

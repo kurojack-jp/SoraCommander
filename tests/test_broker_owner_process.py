@@ -14,6 +14,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from tests._test_owner_lease import isolated_owner_lease
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 if os.name == "nt":
@@ -31,6 +33,8 @@ WIRE = json.dumps({"version": 2, "op": "read_result",
 _CHILD = '''import sys
 from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
+from sora_commander_next import broker_owner_lease
+broker_owner_lease._LEASE_NAME_PREFIX = sys.argv[3]
 from sora_commander_next.broker_owner_process import BrokerOwnerProcess, JobManager
 from sora_commander_next.broker_owner_lease import BrokerOwnerLeaseError
 with patch("sora_commander_next.broker_owner_process.JobManager", wraps=JobManager) as factory:
@@ -47,6 +51,9 @@ with patch("sora_commander_next.broker_owner_process.JobManager", wraps=JobManag
 
 @unittest.skipUnless(os.name == "nt", "actual Windows required")
 class BrokerOwnerProcessTests(unittest.TestCase):
+    def setUp(self):
+        self.lease_prefix = self.enterContext(isolated_owner_lease())
+
     def candidate(self, **kwargs):
         candidate = core.BrokerOwnerProcess(str(Path(sys.executable).absolute()),
                                            str(ROOT), **kwargs)
@@ -121,7 +128,7 @@ class BrokerOwnerProcessTests(unittest.TestCase):
         def run_child():
             result = subprocess.run(
                 [sys.executable, "-I", "-S", "-B", "-c", _CHILD,
-                 str(ROOT / "src"), str(ROOT)], cwd=str(ROOT),
+                 str(ROOT / "src"), str(ROOT), self.lease_prefix], cwd=str(ROOT),
                 capture_output=True, text=True, timeout=15, close_fds=True,
                 creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(result.returncode, 0, result.stderr)

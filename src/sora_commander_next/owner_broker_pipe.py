@@ -114,9 +114,12 @@ def broker_pipe_name(sid, session_id):
     return f"{_NAME_PREFIX}Broker-{session_id}-{digest}"
 
 
-def _valid_name(name):
+def valid_broker_pipe_name(name):
     return (type(name) is str and name.startswith(_NAME_PREFIX)
             and re.fullmatch("[A-Za-z0-9-]{1,96}", name[len(_NAME_PREFIX):]) is not None)
+
+
+_valid_name = valid_broker_pipe_name
 
 
 def _io(handle, issue, deadline, stop_event=None, connect=False):

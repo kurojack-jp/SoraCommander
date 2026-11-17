@@ -22,12 +22,17 @@ SOURCE = ROOT / "src" / "sora_commander_next"
 sys.path.insert(0, str(ROOT / "src"))
 from sora_commander_next import offline_broker_owner_process_probe as probe
 from sora_commander_next import release_inventory as inventory
+from tests._test_owner_lease import new_test_prefix
 
 # Only this fixed module is executed, with an isolated interpreter, fixed source
 # path and cwd. No environment-supplied executable, import path or command.
+# The test-only lease prefix is written into the fixed code, never read from the environment.
+_LEASE_PREFIX = new_test_prefix()
 _BOOTSTRAP = (
     "import runpy, sys; "
     f"sys.path.insert(0, {str(ROOT / 'src')!r}); "
+    "from sora_commander_next import broker_owner_lease; "
+    f"broker_owner_lease._LEASE_NAME_PREFIX = {_LEASE_PREFIX!r}; "
     "runpy.run_module('sora_commander_next.offline_broker_owner_process_probe', "
     "run_name='__main__')")
 _BASE = (sys.executable, "-I", "-S", "-B", "-c", _BOOTSTRAP, "--probe")

@@ -28,6 +28,14 @@ Sora Commander is an MCP server for Windows. It connects to ChatGPT through Open
 
 日本語の説明は[下](#日本語)にあります。
 
+The optional [read-only Muse bridge](docs/muse-bridge.md)
+([日本語](docs/muse-bridge.ja.md)) lets an agent on your own tailnet read through
+Sora Commander on a Windows PC that stays on; commands are refused and no
+approval window opens from the bridge. Tested on the author's own setup only;
+whether another account's Muse can join its own tailnet the same way is not yet
+confirmed. Muse is a Meta product; this project is not affiliated with or
+endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
+
 ## What it does
 
 - Runs commands and reports their output, exit codes and running jobs
@@ -36,6 +44,13 @@ Sora Commander is an MCP server for Windows. It connects to ChatGPT through Open
 - Opens a local approval window for commands and edits. There is no remote approval
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
+
+## New in v0.2.0
+
+- **Read-only Muse bridge** (optional, unofficial): an agent on your own Tailscale tailnet can read through Sora Commander. Only nodes you list by Tailscale StableID get in; file tools read only, commands are refused, and no approval window opens from the bridge. It can run beside the Broker. Read-only only: command execution through the bridge is not offered in this release. Tested with Muse on the author's own setup only. See [docs/muse-bridge.md](docs/muse-bridge.md).
+- **One process per Owner journal.** The Broker, its maintenance commands and the journal-using entry points now take a per-logon lock before opening the journal, the output archive or the launch ledger. A second one stops with one `[HOLD]` line and touches nothing (exit 6 for the Broker).
+- A malformed `--pipe-name` now stops the Broker with one `[HOLD]` line (exit 2) before it takes the lock or opens any storage.
+- **After updating, restart the Broker and its client, then refresh the tools in ChatGPT.** No tool was added or removed.
 
 ## New in v0.1.9
 
@@ -160,6 +175,13 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+## v0.2.0 の新機能
+
+- **読み取り専用のMuseブリッジ**（任意・非公式）：自分のTailscale tailnet内のエージェントから、Sora Commanderを通じて読み取れます。入れるのはTailscaleのStableIDで登録したノードだけで、ファイルツールは読み取りのみ、コマンドは拒否され、ブリッジから承認窓は開きません。Brokerと並べて動かせます。このリリースは読み取り専用だけで、ブリッジ経由のコマンド実行は提供しません。Museで試したのは作者自身の環境だけです。[docs/muse-bridge.ja.md](docs/muse-bridge.ja.md)を参照してください。
+- **Ownerのjournalは1プロセスだけが使います。** Broker、その保守コマンド、journalを使う入口は、journal・出力アーカイブ・起動台帳を開く前にログオン単位の鍵を取ります。2つ目は`[HOLD]`を1行出して何も触らずに止まります（Brokerは終了コード6）。
+- 形の正しくない`--pipe-name`は、鍵を取ったり保存先を開いたりする前に、`[HOLD]`を1行出して止まります（終了コード2）。
+- **更新後はBrokerとそのクライアントを再起動し、その後ChatGPTのツールを再読み込みしてください。** ツールの追加・削除はありません。
 
 ## v0.1.9 の新機能
 

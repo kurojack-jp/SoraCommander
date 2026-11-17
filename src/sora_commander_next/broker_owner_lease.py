@@ -23,6 +23,7 @@ _GUARD_TYPE = OwnerSessionGuard
 _kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 _advapi = ctypes.WinDLL("advapi32", use_last_error=True)
 _ERROR_ALREADY_EXISTS = 183
+_LEASE_NAME_PREFIX = "Local\\SoraCommanderNext.BrokerOwnerLease.v1."
 
 
 class _SecurityAttributes(ctypes.Structure):
@@ -86,7 +87,7 @@ class BrokerOwnerLease:
         binding = json.dumps(
             [identity.sid, *identity.logon_luid, identity.session_id],
             ensure_ascii=True, separators=(",", ":")).encode("ascii")
-        self._name = "Local\\SoraCommanderNext.BrokerOwnerLease.v1." + (
+        self._name = _LEASE_NAME_PREFIX + (
             hashlib.sha256(binding).hexdigest())
         self._handle = None
         self._thread_id = None

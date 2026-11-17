@@ -146,6 +146,7 @@ MODULES = tuple(sorted((
     "broker_frames.py",
     "broker_launch_fence.py",
     "broker_owner_lease.py",
+    "owner_journal_lease.py",  # lifetime lease wrapper; imported by stdio_main's Owner pilot
     "broker_owner_process.py",
     "broker_protocol.py",
     "broker_runtime.py",

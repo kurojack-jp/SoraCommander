@@ -3,6 +3,7 @@
 The only child is a fixed same-project lease-only script in a disposable temp
 directory. No jobs, UI, protected paths, IPC, deployment or permanent changes.
 """
+import ast
 import ctypes
 from ctypes import wintypes
 from contextlib import contextmanager
@@ -21,6 +22,8 @@ import unittest
 from unittest.mock import Mock, patch
 import uuid
 
+from tests._test_owner_lease import isolated_owner_lease
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 if os.name == "nt":
@@ -29,9 +32,11 @@ if os.name == "nt":
 
 
 # Fixed code, independent interpreter, real guard and real kernel acquisition.
-# Only a public source path is passed; no SID, consent, credential or name input.
+# Public source path and test-only prefix are passed explicitly; no environment override.
 _CHILD = '''import sys
 sys.path.insert(0, sys.argv[1])
+from sora_commander_next import broker_owner_lease
+broker_owner_lease._LEASE_NAME_PREFIX = sys.argv[2]
 from sora_commander_next.broker_owner_lease import BrokerOwnerLease, BrokerOwnerLeaseError
 candidate = BrokerOwnerLease()
 try:
@@ -59,6 +64,14 @@ def _temporary_directory():
 
 @unittest.skipUnless(os.name == "nt", "actual Windows required")
 class BrokerOwnerLeaseTests(unittest.TestCase):
+    def setUp(self):
+        # The exact production-name check constructs only; it never enters.
+        if self._testMethodName == "test_name_is_exact_real_logon_digest_and_environment_independent":
+            self.enterContext(patch.object(lease, "_CreateMutexW",
+                                           side_effect=AssertionError("real mutex forbidden")))
+            return
+        self.lease_prefix = self.enterContext(isolated_owner_lease())
+
     def candidate(self):
         candidate = lease.BrokerOwnerLease()
         self.addCleanup(candidate.close)
@@ -103,7 +116,8 @@ class BrokerOwnerLeaseTests(unittest.TestCase):
 
             def run_child():
                 result = subprocess.run(
-                    [sys.executable, "-I", "-S", "-B", str(child), str(ROOT / "src")],
+                    [sys.executable, "-I", "-S", "-B", str(child), str(ROOT / "src"),
+                     self.lease_prefix],
                     cwd=str(directory), capture_output=True, text=True, timeout=10,
                     close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -217,6 +231,15 @@ class BrokerOwnerLeaseTests(unittest.TestCase):
         self.assertNotIn(identity.sid, candidate._name)
         with patch.dict(os.environ, {"SORA_BROKER_MUTEX": "Global\\forged"}):
             self.assertEqual(self.candidate()._name, expected)
+
+    def test_test_prefix_is_distinct_and_helper_restores_it(self):
+        real_prefix = "Local\\SoraCommanderNext.BrokerOwnerLease.v1."
+        outer_prefix = lease._LEASE_NAME_PREFIX
+        with isolated_owner_lease() as prefix:
+            self.assertNotEqual(prefix, real_prefix)
+            self.assertFalse(prefix.startswith(real_prefix))
+            self.assertTrue(self.candidate()._name.startswith(prefix))
+        self.assertEqual(lease._LEASE_NAME_PREFIX, outer_prefix)
 
     def test_rejects_caller_supplied_name_sid_and_guard(self):
         for kwargs in ({"name": "Local\\forged"}, {"sid": "S-1-5-18"},
@@ -460,6 +483,31 @@ class BrokerOwnerLeaseTests(unittest.TestCase):
         from sora_commander_next.release_inventory import MODULES, DEV_ONLY_MODULES
         self.assertIn("broker_owner_lease.py", MODULES)
         self.assertNotIn("broker_owner_lease.py", DEV_ONLY_MODULES)
+
+
+class LeaseNameSourceTests(unittest.TestCase):
+    def test_production_prefix_has_one_literal_definition_and_no_environment_lookup(self):
+        source_path = ROOT / "src" / "sora_commander_next" / "broker_owner_lease.py"
+        definitions = []
+        for path in sorted((ROOT / "src").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+            for node in ast.walk(tree):
+                if ((isinstance(node, ast.Name) and node.id == "_LEASE_NAME_PREFIX")
+                        or (isinstance(node, ast.Attribute) and node.attr == "_LEASE_NAME_PREFIX")):
+                    if isinstance(node.ctx, (ast.Store, ast.Del)):
+                        definitions.append((path, node.lineno))
+        self.assertEqual(len(definitions), 1, definitions)
+        self.assertEqual(definitions[0][0], source_path)
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        definition = next(node for node in tree.body
+                          if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == "_LEASE_NAME_PREFIX"
+                                  for target in node.targets))
+        self.assertEqual(ast.literal_eval(definition.value),
+                         "Local\\SoraCommanderNext.BrokerOwnerLease.v1.")
+        self.assertNotIn("os.environ", source)
+        self.assertNotIn("getenv", source)
 
 
 if __name__ == "__main__":

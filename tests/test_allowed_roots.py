@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from tests._inherited_test_temp import inherited_test_temp
+from tests._test_owner_lease import isolated_owner_lease
 from sora_commander_next import allowed_roots as roots
 
 
@@ -180,8 +181,9 @@ class RootCompositionTests(unittest.TestCase):
                 patch.object(backend, "OwnerBrokerService"), \
                 patch.object(backend, "OwnerBrokerPipeServer") as server, \
                 patch.object(backend.sys, "stdin", []), \
-                patch.object(backend.sys, "stdout", new_callable=io.StringIO) as output:
-            self.assertEqual(backend.main(["--pipe-name", "synthetic-pipe"]), 0)
+                patch.object(backend.sys, "stdout", new_callable=io.StringIO) as output,                 isolated_owner_lease():
+            self.assertEqual(backend.main(
+                ["--pipe-name", "\\\\.\\pipe\\SoraCommanderNext-Test-synthetic-pipe"]), 0)
             self.assertIn("[INFO] Allowed folders: 2 full, 1 read-only for file tools", output.getvalue())
             self.assertNotIn("private-folder", output.getvalue())
             self.assertNotIn("private-read-folder", output.getvalue())
