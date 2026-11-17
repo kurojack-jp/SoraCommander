@@ -39,7 +39,50 @@ step 4; skip steps 2, 3, 5 and 6. Then:
   ```
 
   Copy only the agent's StableID into the peers file. Keep the output to
-  yourself.
+  yourself. The Tailscale admin console's machine details show the same ID.
+  Either way it ends in `CNTRL`.
+
+### On the Muse side (as Muse describes it; not checked by the author)
+
+1. Ask Muse in chat to join your Tailscale network. It shows an approval link.
+2. Open the link and approve the device named `muse` for your tailnet. Muse
+   says the link stays valid for five days.
+3. Put the `muse` device's StableID in `readonly`, start the bridge, then ask
+   Muse to connect to your PC's Tailscale address. Muse may ask you once to
+   allow that address.
+
+Connections go one way, from Muse to the PC. Muse does not answer ping, so
+judge by whether a `status` call works.
+
+### Limit what the agent can reach (recommended)
+
+A new tailnet starts with an allow-all access policy, so once Muse joins it
+can reach every port on every device in the tailnet, not only the bridge. In
+the Tailscale admin console, under Access controls, limit it to the bridge
+port. If your tailnet holds only this PC and Muse, a policy like this is
+enough (use the Tailscale addresses shown in the Machines list):
+
+```json
+{
+  "hosts": {
+    "my-pc": "100.64.0.1",
+    "muse": "100.64.0.2"
+  },
+  "grants": [
+    { "src": ["muse"], "dst": ["my-pc"], "ip": ["tcp:8765"] }
+  ]
+}
+```
+
+This replaces the default allow-all rule. If other devices share the tailnet,
+keep or add the rules they need, or they lose access to each other. Check the
+result in the admin console before saving. See Tailscale's documentation on
+grants and policy syntax for the exact rules.
+
+### Removing access
+
+Delete the `muse` device in the Tailscale admin console, and remove its
+StableID from `muse-bridge-peers.json`, then restart the bridge.
 
 ### When it does not connect
 
