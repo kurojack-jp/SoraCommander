@@ -8,7 +8,7 @@ import stat
 import subprocess
 from threading import Thread
 
-from .file_reads import ReadBoundaryError, _check, _read_name_denied
+from .file_reads import ReadBoundaryError, _check, _read_name_denied, _require_local_path
 
 CAP = 65536
 MAX_OFFSET = 256 * 1024 * 1024
@@ -220,17 +220,32 @@ def _repository(path, roots, with_branch=False):
 
 
 def _file(top, value, roots):
+    _require_local_path(value, ReadBoundaryError)
     _relative(value)
-    target = top / value
+    parts = Path(value).parts
     # Deleted/historical files still need both lexical and existing-parent checks.
-    if any(_read_name_denied(part) for part in Path(value).parts):
+    if any(_read_name_denied(part) for part in parts):
         raise ReadBoundaryError("PROTECTED_FILE")
-    resolved = target.resolve()
-    if not resolved.is_relative_to(top):
-        raise ReadBoundaryError("FILE_OUTSIDE_REPOSITORY")
+    target = top / value
     existing = target
-    while not existing.exists() and not existing.is_symlink():
-        existing = existing.parent
+    component = top
+    for name in (None, *parts):
+        if name is not None:
+            component = component / name
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            if component == top:
+                raise
+            break
+        is_junction = getattr(component, "is_junction", None)
+        if (stat.S_ISLNK(info.st_mode)
+                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                or (is_junction is not None and is_junction())):
+            raise ReadBoundaryError("FILE_OUTSIDE_REPOSITORY")
+        existing = component
+    if not target.resolve().is_relative_to(top):
+        raise ReadBoundaryError("FILE_OUTSIDE_REPOSITORY")
     _check(str(existing), roots)
     return value
 

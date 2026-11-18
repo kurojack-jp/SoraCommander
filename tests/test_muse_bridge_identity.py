@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
+from tests._inherited_test_temp import inherited_test_temp
 from tools import scn_muse_bridge as bridge
 
 IP = "100.64.0.2"
@@ -22,6 +23,27 @@ TOKEN = "synthetic-only-" + "s" * 40
 def reply(stable="muse-node", addresses=None):
     return SimpleNamespace(returncode=0, stdout=json.dumps({"Node": {
         "StableID": stable, "Addresses": [IP + "/32"] if addresses is None else addresses}}))
+
+
+class CliJsonTests(unittest.TestCase):
+    def test_oversized_stdout_is_refused(self):
+        stdout = b"{}" + b" " * (64 * 1024 - 1)
+        runner = Mock(return_value=SimpleNamespace(returncode=0, stdout=stdout))
+        with self.assertRaisesRegex(ValueError, "response too large"):
+            bridge._cli_json(["status", "--json"], runner=runner, finder=lambda: "fake-cli")
+
+    def test_duplicate_stable_id_is_refused(self):
+        stdout = b'{"Node":{"StableID":"other","StableID":"muse-node"}}'
+        runner = Mock(return_value=SimpleNamespace(returncode=0, stdout=stdout))
+        with self.assertRaises(ValueError):
+            bridge._cli_json(["whois", "--json", IP], runner=runner, finder=lambda: "fake-cli")
+
+    def test_deeply_nested_json_refuses_identity(self):
+        depth = sys.getrecursionlimit() + 100
+        stdout = b'{"Node":' + b"[" * depth + b"0" + b"]" * depth + b"}"
+        runner = Mock(return_value=SimpleNamespace(returncode=0, stdout=stdout))
+        identity = bridge.PeerIdentity(["muse-node"], runner=runner, finder=lambda: "fake-cli")
+        self.assertIs(identity.accepts(IP), False)
 
 
 class IdentityTests(unittest.IsolatedAsyncioTestCase):
@@ -184,6 +206,14 @@ class StartupTests(unittest.TestCase):
 
     def test_readonly_startup_modes_and_default_no_lookup(self):
         from sora_commander_next.allowed_roots import AllowedRoots
+        folder = Path(self.enterContext(inherited_test_temp()))
+        profile = folder / "profile"
+        local = profile / "AppData" / "Local"
+        local.mkdir(parents=True)
+        self.enterContext(patch.dict(os.environ, {"USERPROFILE": str(profile), "LOCALAPPDATA": str(local)}))
+        config = profile / ".config" / "sora-commander" / "allowed-roots.txt"
+        config.parent.mkdir(parents=True)
+        config.write_text(str(ROOT) + "\n", encoding="utf-8")
         server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()))
         with patch.object(bridge, "load_peers", return_value={"readonly": ["muse-node"], "exec": []}) as peers, \
                 patch.object(bridge, "load_token", return_value=TOKEN) as token, \

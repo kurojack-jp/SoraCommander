@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 import math
 
+from .file_reads import _require_local_path
+
 
 class BatchArgumentMetacharacterRejected(ValueError):
     """Batch files cannot safely receive cmd.exe metacharacters as arguments."""
@@ -13,6 +15,7 @@ class BatchArgumentMetacharacterRejected(ValueError):
 def absolute(value: str) -> str:
     if not isinstance(value, str) or not value or "\0" in value:
         raise ValueError("path must be a nonempty string")
+    _require_local_path(value, ValueError)
     path = Path(value)
     if not path.is_absolute():
         raise ValueError("absolute path required; executable aliases are unsupported")
@@ -34,6 +37,8 @@ class Command:
             raise ValueError("interactive must be a boolean")
         if not isinstance(self.argv, (list, tuple)) or len(self.argv) > 128:
             raise ValueError("argv must be a list or tuple of at most 128 strings")
+        if isinstance(self.cwd, str):
+            _require_local_path(self.cwd, ValueError)
         resolved_executable = absolute(self.executable)
         if (Path(resolved_executable).suffix.casefold() in {".bat", ".cmd"}
                 and any(isinstance(arg, str) and any(c in arg for c in '&|<>^%!"\r\n\0')

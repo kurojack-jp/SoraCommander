@@ -45,6 +45,21 @@ endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
 
+## New in v0.2.1
+
+A hardening release; please update.
+
+- **UNC and device paths are refused before they are touched.** Read tools, edit previews and command `executable`/`cwd` refuse `\\server\share\…`, `//…`, `\\?\…` and `\\.\…` at once. Before this release, such a path could make Windows contact the named server first, which may send your Windows sign-in to it, before Sora Commander refused it. This applies through ChatGPT as well as through the Muse bridge.
+- Git file reads refuse a link or junction inside the repository before following it.
+- **Read-only Muse bridge:**
+  - It no longer lists the DEV-only tools (file writes, `send_input`, `list_processes`, `get_config`); it now has 41 tools.
+  - It refuses to start without `allowed-roots.txt`.
+  - It closes WebSocket connections.
+  - It checks Tailscale's answers more strictly.
+  - Its default read-only token file is now under `%USERPROFILE%`, like the exec token.
+- Found in a review by Muse and Grok, then checked against the code. Live checks were on the author's setup only.
+- **After updating, restart the Broker, its client and the bridge, then refresh the tools in ChatGPT.** The ChatGPT tool list is unchanged.
+
 ## New in v0.2.0
 
 - **Read-only Muse bridge** (optional, unofficial): an agent on your own Tailscale tailnet can read through Sora Commander. Only nodes you list by Tailscale StableID get in; file tools read only, commands are refused, and no approval window opens from the bridge. It can run beside the Broker. Read-only only: command execution through the bridge is not offered in this release. Tested with Muse on the author's own setup only. See [docs/muse-bridge.md](docs/muse-bridge.md).
@@ -175,6 +190,21 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+## v0.2.1 の変更
+
+守りを固めるリリースです。更新してください。
+
+- **UNCパスとデバイスパスは、触る前に拒否します。** 読み取りツール、編集のプレビュー、コマンドの`executable`・`cwd`で、`\\server\share\…`・`//…`・`\\?\…`・`\\.\…`をすぐに拒否します。これまでは、拒否する前にWindowsが指定先のサーバーへ接続しに行き、Windowsのサインイン情報を送ってしまうおそれがありました。ChatGPT経由でもMuseブリッジ経由でも同じです。
+- Gitのファイル読み取りは、リポジトリ内のリンクやジャンクションを、たどる前に拒否します。
+- **読み取り専用のMuseブリッジ：**
+  - 開発用のツール（ファイルの書き込み、`send_input`、`list_processes`、`get_config`）を出さなくなり、ツールは41個になりました。
+  - `allowed-roots.txt`が無いと起動しません。
+  - WebSocketの接続は閉じます。
+  - Tailscaleからの応答の確認を厳しくしました。
+  - 読み取り用トークンの既定の置き場所を、exec用と同じ`%USERPROFILE%`の下にしました。
+- MuseとGrokのレビューで見つかり、コードで確かめたものです。実機の確認は作者自身の環境だけです。
+- **更新後はBroker・クライアント・ブリッジを再起動し、その後ChatGPTのツールを再読み込みしてください。** ChatGPTのツール一覧は変わりません。
 
 ## v0.2.0 の新機能
 

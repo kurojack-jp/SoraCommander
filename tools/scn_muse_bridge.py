@@ -120,7 +120,9 @@ def _cli_json(arguments, *, runner, finder):
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if result.returncode != 0:
         raise ValueError("CLI failed")
-    payload = json.loads(result.stdout)
+    if len(result.stdout) > 64 * 1024:
+        raise ValueError("CLI response too large")
+    payload = json.loads(result.stdout, object_pairs_hook=_unique_object)
     if not isinstance(payload, dict):
         raise ValueError("invalid CLI response")
     return payload
@@ -151,7 +153,7 @@ class PeerIdentity:
                 if not isinstance(addresses, list) or f"{ip}/32" not in addresses:
                     raise ValueError("address mismatch")
                 stable_id = node["StableID"]
-            except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+            except (OSError, ValueError, TypeError, RecursionError, subprocess.SubprocessError):
                 accepted, reason = False, "lookup failed"
             else:
                 accepted = stable_id in self.allowed
@@ -183,7 +185,7 @@ def transport_lists(bind, port, *, allow_magicdns=False, runner=subprocess.run,
                 ):
                     hosts.extend([name, f"{name}:{port}"])
                     origins.append(f"http://{name}:{port}")
-        except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        except (OSError, ValueError, TypeError, RecursionError, subprocess.SubprocessError):
             pass
     return hosts, origins
 
@@ -250,7 +252,13 @@ class TokenGate:
         self.auth, self.identity = auth, identity
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http":
+        scope_type = scope.get("type")
+        if scope_type == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        if scope_type not in ("http", "lifespan"):
+            return
+        if scope_type == "http":
             headers = dict(scope.get("headers") or [])
             presented = headers.get(TOKEN_HEADER, b"")
             accepted = self.auth == "tailscale" or hmac.compare_digest(presented, self.token)
@@ -332,9 +340,17 @@ def main(argv=None) -> int:
             return 2
 
     if args.mode == "readonly":
-        readonly_file = (Path(args.token_file) if args.token_file is not None else
-                         Path.home() / ".config" / "sora-commander" / "muse-bridge-token.txt")
-        token = load_token(readonly_file) if auth != "tailscale" else ""
+        token = ""
+        if auth != "tailscale":
+            if args.token_file is None:
+                home = Path(os.environ.get("USERPROFILE", ""))
+                if not home.is_absolute():
+                    print("[HOLD] Owner profile unavailable; bridge not started.", file=sys.stderr)
+                    return 2
+                readonly_file = home / ".config" / "sora-commander" / "muse-bridge-token.txt"
+            else:
+                readonly_file = Path(args.token_file)
+            token = load_token(readonly_file)
     else:
         token_file = (Path(os.environ.get("USERPROFILE", "")) / ".config" / "sora-commander" / EXEC_TOKEN_NAME
                       if args.token_file is None else Path(args.token_file))
@@ -355,7 +371,7 @@ def main(argv=None) -> int:
 
 
 def _serve_bridge(args, checkout, token, auth, identity):
-    from sora_commander_next.allowed_roots import startup_allowed_roots
+    from sora_commander_next.allowed_roots import _locations, startup_allowed_roots
     from sora_commander_next.host import Host
     from sora_commander_next.mcp_adapter import build_server
     from sora_commander_next.policy import Policy
@@ -363,13 +379,23 @@ def _serve_bridge(args, checkout, token, auth, identity):
     host = None
     try:
         if args.mode == "readonly":
+            try:
+                _, config, _, _ = _locations(os.environ)
+                config.lstat()
+            except FileNotFoundError:
+                print("[HOLD] allowed-roots.txt is missing; the read-only bridge serves only folders you list. Bridge not started.",
+                      file=sys.stderr)
+                return 2
+            except Exception:
+                print("[HOLD] allowed-roots.txt could not be checked. Bridge not started.", file=sys.stderr)
+                return 2
             roots = startup_allowed_roots(str(checkout), "development", os.environ)
             read_all = tuple(roots.read)
             if not read_all:
                 raise SystemExit("allowed-roots.txt configured no folders; nothing to serve.")
             # Every allowed root is demoted to read-only here: Policy roots stay empty.
             host = Host(policy=Policy(roots=(), read_only_roots=read_all))
-            server = build_server(host)
+            server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
         else:
             try:
                 host = build_exec_host(checkout, enable_edit=args.enable_edit_pilot,
@@ -409,7 +435,7 @@ def _serve_bridge(args, checkout, token, auth, identity):
         import uvicorn
 
         try:
-            uvicorn.run(app, host=args.bind, port=args.port, log_level="info", proxy_headers=False)
+            uvicorn.run(app, host=args.bind, port=args.port, log_level="info", proxy_headers=False, ws="none")
         finally:
             if args.mode == "exec":
                 print("[bridge] EXEC listener stopped. Reconcile existing jobs; never replay unknown outcomes.")

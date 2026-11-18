@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from tests._inherited_test_temp import inherited_test_temp
 from tools import scn_muse_bridge as bridge
@@ -21,6 +21,24 @@ READ_TOKEN = "read-synthetic-" + "r" * 48
 
 
 class TokenGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_websocket_scope_is_closed_without_reaching_app(self):
+        app, send = AsyncMock(), AsyncMock()
+        await bridge.TokenGate(app, READ_TOKEN)({"type": "websocket"}, Mock(), send)
+        send.assert_awaited_once_with({"type": "websocket.close", "code": 1008})
+        app.assert_not_called()
+
+    async def test_lifespan_scope_reaches_app(self):
+        app, receive, send = AsyncMock(), AsyncMock(), AsyncMock()
+        scope = {"type": "lifespan"}
+        await bridge.TokenGate(app, READ_TOKEN)(scope, receive, send)
+        app.assert_awaited_once_with(scope, receive, send)
+
+    async def test_unknown_scope_is_dropped(self):
+        app, send = AsyncMock(), AsyncMock()
+        await bridge.TokenGate(app, READ_TOKEN)({"type": "other"}, Mock(), send)
+        app.assert_not_called()
+        send.assert_not_called()
+
     async def test_exec_missing_wrong_and_readonly_token_are_401(self):
         calls = []
 
@@ -118,14 +136,21 @@ class MainTests(unittest.TestCase):
         self.enterContext(patch("uvicorn.run", self.run))
         self.enterContext(patch("mcp.server.transport_security.TransportSecuritySettings", self.security))
         self.argv = ["--checkout", str(ROOT), "--bind", "100.64.0.1"]
+        self.profile = ROOT / "synthetic-owner-profile"
+        self.enterContext(patch.dict(os.environ, {"USERPROFILE": str(self.profile),
+                                                  "HOME": str(ROOT / "different-home")}))
+        self.config = Mock(spec=Path)
+        self.locations = self.enterContext(patch("sora_commander_next.allowed_roots._locations",
+                                                 return_value=(self.profile, self.config, (), ())))
         self.server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()))
         self.built = self.enterContext(patch("sora_commander_next.mcp_adapter.build_server", return_value=self.server))
 
     def test_default_readonly_host_and_banner_are_preserved(self):
         roots = AllowedRoots((str(ROOT),), (str(ROOT / "docs"),))
         with patch("sora_commander_next.allowed_roots.startup_allowed_roots", return_value=roots), \
-                patch.object(bridge, "load_token", return_value=READ_TOKEN):
+                patch.object(bridge, "load_token", return_value=READ_TOKEN) as load:
             self.assertEqual(bridge.main(self.argv), 0)
+        load.assert_called_once_with(self.profile / ".config/sora-commander/muse-bridge-token.txt")
         host = self.built.call_args.args[0]
         self.assertEqual(host.policy.roots, ())
         self.assertEqual(host.policy.read_roots, roots.read)
@@ -134,9 +159,34 @@ class MainTests(unittest.TestCase):
         self.assertEqual(result["status"], "DENY")
         self.assertIn("Sora Commander read-only bridge for Muse", self.output.getvalue())
         self.assertNotIn("mode: EXEC", self.output.getvalue())
-        self.built.assert_called_once_with(host)
+        self.built.assert_called_once_with(host, dev_writes_enabled=False, dev_tools_enabled=False)
+        self.assertEqual(self.run.call_args.kwargs["ws"], "none")
         self.security.assert_called_once_with(enable_dns_rebinding_protection=True,
             allowed_hosts=["100.64.0.1:8765", "100.64.0.1"], allowed_origins=["http://100.64.0.1:8765"])
+
+    def test_missing_allowed_roots_file_prevents_startup(self):
+        self.config.lstat.side_effect = FileNotFoundError()
+        with patch.object(bridge, "load_token", return_value=READ_TOKEN), \
+                patch("sora_commander_next.allowed_roots.startup_allowed_roots") as startup:
+            self.assertEqual(bridge.main(self.argv), 2)
+        self.assertEqual(self.errors.getvalue().strip(),
+                         "[HOLD] allowed-roots.txt is missing; the read-only bridge serves only folders you list. Bridge not started.")
+        startup.assert_not_called()
+        self.built.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_allowed_roots_location_or_inspection_failure_prevents_startup(self):
+        with patch.object(bridge, "load_token", return_value=READ_TOKEN), \
+                patch("sora_commander_next.allowed_roots.startup_allowed_roots") as startup:
+            self.config.lstat.side_effect = PermissionError("synthetic")
+            self.assertEqual(bridge.main(self.argv), 2)
+            self.locations.side_effect = ValueError("synthetic")
+            self.assertEqual(bridge.main(self.argv), 2)
+        self.assertEqual(self.errors.getvalue().splitlines(),
+                         ["[HOLD] allowed-roots.txt could not be checked. Bridge not started."] * 2)
+        startup.assert_not_called()
+        self.built.assert_not_called()
+        self.run.assert_not_called()
 
     def test_exec_construction_failure_never_listens_or_falls_back(self):
         for failure in (PermissionError("synthetic"), RuntimeError("synthetic"), SystemExit(2)):
@@ -171,6 +221,20 @@ class MainTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Owner composition uses Windows modules")
 class CompositionTests(unittest.TestCase):
+    def test_readonly_catalog_excludes_dev_tools_and_interactive_install(self):
+        from sora_commander_next.mcp_adapter import build_server
+
+        host = Host(policy=Policy(roots=(), read_only_roots=(str(ROOT),)))
+        self.addCleanup(host.close)
+        with patch("sora_commander_next.dev_rdc_compat.install_host_interactive") as install:
+            server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+        names = {tool.name for tool in server._tool_manager.list_tools()}
+        self.assertTrue({"status", "read_text_file", "path_info", "list_folder"} <= names)
+        self.assertTrue(names.isdisjoint({"send_input", "create_directory", "create_file", "move_file",
+                                          "request_source_patch_dev", "list_processes", "get_config"}))
+        self.assertEqual(len(names), 41)
+        install.assert_not_called()
+
     def test_shared_composition_keeps_scopes_and_mandatory_dispatcher(self):
         from sora_commander_next import stdio_main, windows_owner_controller, owner_review_dispatch, windows_owner
 

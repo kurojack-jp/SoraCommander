@@ -346,9 +346,11 @@ def _await_submitted_edit_data_only(pilot, initial, wait_seconds):
 
 
 def build_server(host: Host, *, approved_icon_path=None, approved_icon_sha256=None,
-                 dev_writes_enabled=True):
+                 dev_writes_enabled=True, dev_tools_enabled=True):
     if type(dev_writes_enabled) is not bool:
         raise ValueError("explicit boolean DEV write selection required")
+    if type(dev_tools_enabled) is not bool:
+        raise ValueError("explicit boolean DEV tool selection required")
     # Never accept icon path/URI over MCP wire. Local release setup supplies
     # both the PNG and an independently trusted hash; both or neither.
     if (approved_icon_path is None) != (approved_icon_sha256 is None):
@@ -719,7 +721,7 @@ Use to preview one literal exact-text source replacement against the expected SH
     # or broaden the disposable EditReviewPilot's target allowlist.
     # A DEV Broker client forwards the same tools; its Broker holds the writers.
     dev_client = type(host) is not BrokerHost and getattr(host, "dev_broker_client", False) is True
-    if ((type(host) is Host or dev_client) and
+    if (dev_tools_enabled and (type(host) is Host or dev_client) and
             importlib.util.find_spec(f"{__package__}.dev_rdc_compat") is not None):
         from .dev_rdc_compat import mutate, list_processes as processes_readonly
         from .dev_rdc_compat import install_host_interactive

@@ -93,8 +93,13 @@ StableID from `muse-bridge-peers.json`, then restart the bridge.
 | The agent gets HTTP 401 | Its node is not in `readonly`, or it is not in your tailnet | Check the StableID; restart the bridge after editing the file |
 | A command returns `DENY` | Expected: commands are refused in read-only mode | Nothing; use the read tools |
 | `Invalid tool request` for a command | The request is malformed, for example `executable` is not an absolute path | Nothing runs either way; commands are refused in read-only mode |
+| `[HOLD] allowed-roots.txt is missing` | The read-only bridge requires an explicit folder list | Create `allowed-roots.txt`, list the folders to serve, and restart the bridge |
 
 ## Refusals
+
+Read and command tools refuse UNC and Windows device paths before resolving them.
+The read-only bridge refuses to start if `allowed-roots.txt` is missing.
+The exec token must differ from any read-only token, including the one supplied by `SORA_BRIDGE_TOKEN`.
 
 A missing, empty or malformed peers file, or an empty `readonly` list, refuses
 startup (`tests.test_muse_bridge_identity.StartupTests.test_missing_invalid_empty_lists_never_listen`

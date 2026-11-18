@@ -81,8 +81,13 @@ Tailscaleの管理画面で`muse`の機器を削除し、`muse-bridge-peers.json
 | エージェントにHTTP 401が返る | そのノードが`readonly`に無い、またはtailnetに入っていない | StableIDを確かめ、ファイルを直したらブリッジを再起動する |
 | コマンドが`DENY`になる | 想定どおり。読み取り専用ではコマンドは拒否される | 何もしない。読み取り用のツールを使う |
 | コマンドで`Invalid tool request`になる | 要求の形が不正（例：`executable`が絶対パスでない） | どちらにせよ実行されない。読み取り専用ではコマンドは拒否される |
+| `[HOLD] allowed-roots.txt is missing` | 読み取り専用ブリッジにはフォルダーの指定が必要 | `allowed-roots.txt`を作成し、公開するフォルダーを記載してブリッジを再起動する |
 
 ## 拒否される場合
+
+読み取りツールとコマンドは、UNCパスとWindowsデバイスパスを解決前に拒否します。
+`allowed-roots.txt`が無い場合、読み取り専用ブリッジは起動しません。
+exec用トークンには、`SORA_BRIDGE_TOKEN`を含むどの読み取り専用トークンとも異なる値を使います。
 
 peersファイルの欠落・空ファイル・不正形式、または`readonly`が空の場合は
 起動しません

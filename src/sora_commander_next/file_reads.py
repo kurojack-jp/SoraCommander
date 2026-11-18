@@ -6,6 +6,12 @@ import stat
 class ReadBoundaryError(ValueError):
     pass
 
+
+def _require_local_path(value, error_type):
+    if str(value).startswith(("\\\\", "//")) or Path(value).drive.startswith("\\\\"):
+        raise error_type("UNC and device paths are unsupported")
+
+
 # Deny secret-bearing paths regardless of an Owner-selected read root. This is
 # defense in depth, NOT a substitute for scoped roots, OS ACLs, or provenance.
 # Avoid blanket JSON/TOML/LOG bans: ordinary source review and diagnostics
@@ -73,6 +79,7 @@ def _sensitive_component(name):
 
 
 def _check(path,roots):
+    _require_local_path(path, ReadBoundaryError)
     p=Path(path)
     if not p.is_absolute() or not roots or any(type(r) is not str for r in roots):
         raise ReadBoundaryError("absolute path and configured roots required")
