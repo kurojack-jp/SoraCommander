@@ -306,7 +306,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.mode == "exec" and args.auth not in (None, "both"):
         parser.error("exec mode requires --auth both")
-    auth = args.auth or ("both" if args.mode == "exec" else "token")
+    auth = args.auth or ("both" if args.mode == "exec" else "tailscale")
     if args.mode == "readonly" and any((args.enable_dev_writes, args.enable_edit_pilot, args.enable_create_pilot)):
         parser.error("write opt-ins require --mode exec")
     if args.mode == "exec" and args.port != 8765:
@@ -337,6 +337,9 @@ def main(argv=None) -> int:
             identity = PeerIdentity(peers[args.mode])
         except (OSError, ValueError):
             print("[HOLD] Peer allow-list missing, invalid or empty for this mode.", file=sys.stderr)
+            if args.mode == "readonly" and args.auth is None:
+                print("[HOLD] v0.3.0 defaults to Tailscale identity. To keep using a token, start with --auth token.",
+                      file=sys.stderr)
             return 2
 
     if args.mode == "readonly":

@@ -7,6 +7,9 @@ beside the Broker. This release offers read-only access only.
 
 ## Setup
 
+From v0.3.0 the read-only bridge defaults to Tailscale identity. To keep using a
+token, pass `--auth token`, for example with `tools\start-muse-bridge.cmd --auth token`.
+
 1. Prepare the Python environment in [INSTALL](INSTALL.md). Install and run
    Tailscale on the PC, with the agent's node in the same tailnet.
 2. Copy [muse-bridge-peers.example.json](muse-bridge-peers.example.json) to
@@ -97,7 +100,9 @@ StableID from `muse-bridge-peers.json`, then restart the bridge.
 
 ## Refusals
 
-Read and command tools refuse UNC and Windows device paths before resolving them.
+Read and command tools refuse UNC and Windows device paths before resolving them,
+and refuse a symlink or junction whose target is a network location (a UNC path
+or a mapped network drive) before following it.
 The read-only bridge refuses to start if `allowed-roots.txt` is missing.
 The exec token must differ from any read-only token, including the one supplied by `SORA_BRIDGE_TOKEN`.
 

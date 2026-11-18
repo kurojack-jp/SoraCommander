@@ -16,6 +16,9 @@ tailnet the same way is not yet confirmed. Muse is a Meta product; this project
 is not affiliated with or endorsed by Meta. As of November 2026, ChatGPT and
 Muse plan terms can change.
 
+From v0.3.0 the read-only Muse bridge defaults to Tailscale identity. To keep using a
+token, start the bridge with `--auth token`, for example `tools\start-muse-bridge.cmd --auth token`.
+
 ## 1. Get the code and Python packages
 
 Use a folder only you can write to, with **no spaces anywhere in the checkout

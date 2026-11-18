@@ -13,6 +13,10 @@ Tailscaleを起動し、エージェントのノードを同じtailnetに参加�
 MuseはMetaの製品で、このプロジェクトはMetaと提携しておらず、推奨も受けていません。
 2026年11月時点の案内で、ChatGPTとMuseのプラン条件は変わる可能性があります。
 
+v0.3.0から、読み取り専用のMuseブリッジの既定の認証方式はTailscaleのノード識別です。
+トークンを引き続き使う場合は、`tools\start-muse-bridge.cmd --auth token`
+のように`--auth token`を指定します。
+
 ## 1. コードとPythonパッケージを入手する
 
 自分だけが書き込めるフォルダを使い、**checkoutのパスのどこにも空白を入れないでください**。例は`C:\SoraCommander`です。4つのランチャーは、`--check`の場合も含め、checkoutのパスに空白があれば終了コード6で止まります。ASCII以外の文字を含むパスは未確認で、別のPCでの試験が残っています。

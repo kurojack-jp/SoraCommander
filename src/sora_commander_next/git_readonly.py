@@ -8,7 +8,8 @@ import stat
 import subprocess
 from threading import Thread
 
-from .file_reads import ReadBoundaryError, _check, _read_name_denied, _require_local_path
+from .file_reads import (ReadBoundaryError, _check, _is_redirecting_link,
+                         _read_name_denied, _require_local_path)
 
 CAP = 65536
 MAX_OFFSET = 256 * 1024 * 1024
@@ -238,9 +239,10 @@ def _file(top, value, roots):
             if component == top:
                 raise
             break
+        # Data-only reparse points (OneDrive cloud files, deduplication) are
+        # ordinary entries; symlinks, junctions and other name surrogates are not.
         is_junction = getattr(component, "is_junction", None)
-        if (stat.S_ISLNK(info.st_mode)
-                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        if (_is_redirecting_link(info, ReadBoundaryError)
                 or (is_junction is not None and is_junction())):
             raise ReadBoundaryError("FILE_OUTSIDE_REPOSITORY")
         existing = component

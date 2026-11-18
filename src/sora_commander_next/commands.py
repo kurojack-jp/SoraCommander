@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 import math
 
-from .file_reads import _require_local_path
+from .file_reads import _require_local_path, _require_no_network_link
 
 
 class BatchArgumentMetacharacterRejected(ValueError):
@@ -19,6 +19,7 @@ def absolute(value: str) -> str:
     path = Path(value)
     if not path.is_absolute():
         raise ValueError("absolute path required; executable aliases are unsupported")
+    _require_no_network_link(path, ValueError)
     return str(path.resolve())
 
 

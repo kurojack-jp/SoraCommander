@@ -1,6 +1,8 @@
 """Phase10C: bounded local read-only file helpers, no shell execution."""
+from collections import deque
 from pathlib import Path
 from hashlib import sha256
+import os
 import stat
 
 class ReadBoundaryError(ValueError):
@@ -10,6 +12,92 @@ class ReadBoundaryError(ValueError):
 def _require_local_path(value, error_type):
     if str(value).startswith(("\\\\", "//")) or Path(value).drive.startswith("\\\\"):
         raise error_type("UNC and device paths are unsupported")
+
+
+def _drive_type(anchor):
+    if os.name == "nt":
+        import ctypes
+
+        return ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(anchor))
+    return None
+
+
+_NAME_SURROGATE = 0x20000000  # Microsoft reparse-tag bit: "this stands for another name"
+
+
+def _is_redirecting_link(info, error_type):
+    """True for a symlink or junction; data-only reparse points are plain entries.
+
+    OneDrive cloud files and deduplicated files carry FILE_ATTRIBUTE_REPARSE_POINT
+    but do not redirect the path, and os.readlink cannot read them. Any other
+    name-surrogate tag would redirect in a way this check cannot inspect.
+    """
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    if not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        return False
+    tag = getattr(info, "st_reparse_tag", 0)
+    if tag in (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT):
+        return True
+    if tag & _NAME_SURROGATE:
+        raise error_type("link target could not be inspected")
+    return False
+
+
+def _require_no_network_link(path, error_type):
+    """Inspect each link before traversing it or calling resolve."""
+    if os.name == "nt":
+        # Win32 normalizes the supplied DOS path before opening it.
+        path = Path(os.path.normpath(path))
+    anchor, *parts = path.parts
+    current = Path(anchor)
+    pending = deque(parts)
+    hops = 0
+    while pending:
+        part = pending.popleft()
+        if part == "..":
+            current = current.parent
+            continue
+        component = current / part
+        try:
+            info = component.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            if ".." in pending:
+                raise error_type("path component could not be inspected") from None
+            return
+        except OSError:
+            raise error_type("path component could not be inspected") from None
+        if not _is_redirecting_link(info, error_type):
+            current = component
+            continue
+
+        hops += 1
+        if hops > 40:
+            raise error_type("too many path link hops")
+        try:
+            target = os.readlink(component)
+        except OSError:
+            raise error_type("link target could not be inspected") from None
+
+        # Junctions normally return an extended-length local DOS path.
+        spelling = target.replace("/", "\\")
+        extended_drive = (
+            spelling.startswith("\\\\?\\") and len(spelling) >= 7
+            and spelling[4] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            and spelling[5:7] == ":\\"
+        )
+        if spelling.startswith("\\\\") and not extended_drive:
+            raise error_type("link leads to a network location")
+        target_path = Path(target)
+        if target_path.drive and not target_path.root:
+            raise error_type("link target could not be inspected")
+        destination = current / target_path
+        if destination.drive:
+            drive_root = destination.drive.removeprefix("\\\\?\\") + "\\"
+            if _drive_type(drive_root) == 4:  # DRIVE_REMOTE
+                raise error_type("link leads to a network location")
+        current = Path(destination.anchor)
+        pending.extendleft(reversed(destination.parts[1:]))
 
 
 # Deny secret-bearing paths regardless of an Owner-selected read root. This is
@@ -91,12 +179,15 @@ def _check(path,roots):
     # sensitive directory was configured as the root itself.
     if any(_sensitive_component(part) for part in p.parts[1:]):
         raise ReadBoundaryError("sensitive path excluded from read scope")
+    _require_no_network_link(p, ReadBoundaryError)
     p=p.resolve(strict=True)
     allowed=False
     for r in roots:
         root=Path(r)
         if not root.is_absolute():
             raise ReadBoundaryError("absolute root required")
+        _require_local_path(root, ReadBoundaryError)
+        _require_no_network_link(root, ReadBoundaryError)
         resolved=root.resolve(strict=True)
         if p.is_relative_to(resolved):
             # A bad root selection cannot grant access to a secret vault.

@@ -45,6 +45,19 @@ endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
 
+## New in v0.3.0
+
+**One change may need action:** the read-only Muse bridge now defaults to Tailscale identity.
+
+- **Read-only Muse bridge: `--auth` now defaults to `tailscale`, not `token`.**
+  - If you start `tools\start-muse-bridge-tailscale.cmd`, as the guide shows, nothing changes.
+  - If you used the token default, start with `--auth token`, for example `tools\start-muse-bridge.cmd --auth token`. Without it, the bridge stops with a `[HOLD]` line that says so.
+- **Links that lead to the network are refused before they are followed.** Read tools, edit previews and a command's `executable`/`cwd` now check every existing folder on the way. A symlink or junction whose target is a UNC path or a mapped network drive is refused before Windows follows it. The same applies to a chain of such links, and to a configured folder.
+  - Ordinary links that stay on your own drives still work.
+  - OneDrive cloud files and deduplicated files are treated as ordinary files.
+- Checked live on the author's setup only. Ordinary reads through ChatGPT and Muse's `status` (41 tools) still work. The network-link cases were tested with simulated links, not real network shares.
+- **After updating, restart the Broker, its client and the bridge, then refresh the tools in ChatGPT.** The ChatGPT tool list is unchanged.
+
 ## New in v0.2.1
 
 A hardening release; please update.
@@ -190,6 +203,19 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+## v0.3.0 の変更
+
+**1つだけ、対応が要るかもしれない変更があります。** 読み取り専用のMuseブリッジの既定の認証方式が、Tailscaleのノード識別になりました。
+
+- **読み取り専用のMuseブリッジ：`--auth`の既定が`token`から`tailscale`に変わりました。**
+  - 説明書のとおり`tools\start-muse-bridge-tailscale.cmd`で起動している場合は、何も変わりません。
+  - これまで既定のトークンで使っていた場合は、`tools\start-muse-bridge.cmd --auth token`のように`--auth token`を付けて起動してください。付けないと、そう案内する`[HOLD]`の行を出して止まります。
+- **ネットワークにつながるリンクは、たどる前に拒否します。** 読み取りツール、編集のプレビュー、コマンドの`executable`・`cwd`は、途中にある既存のフォルダを1つずつ確かめるようになりました。行き先がUNCパスや割り当てたネットワークドライブのシンボリックリンク・ジャンクションは、Windowsがたどる前に拒否します。リンクが続く場合も、許可フォルダそのものも同じです。
+  - 自分のドライブの中にとどまる普通のリンクは、これまでどおり使えます。
+  - OneDriveのクラウドファイルや重複除去されたファイルは、普通のファイルとして扱います。
+- 実機の確認は作者自身の環境だけです。ChatGPT経由の普通の読み取りとMuseの`status`（41ツール）は動いています。ネットワークを指すリンクは模擬したリンクで試したもので、本物のネットワーク共有では試していません。
+- **更新後はBroker・クライアント・ブリッジを再起動し、その後ChatGPTのツールを再読み込みしてください。** ChatGPTのツール一覧は変わりません。
 
 ## v0.2.1 の変更
 

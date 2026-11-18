@@ -12,7 +12,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from tests._inherited_test_temp import inherited_test_temp
 from tools import scn_muse_bridge as bridge
 
 IP = "100.64.0.2"
@@ -183,7 +182,7 @@ class StartupTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(sys, "path", list(sys.path)))
         self.enterContext(redirect_stdout(io.StringIO()))
-        self.enterContext(redirect_stderr(io.StringIO()))
+        self.errors = self.enterContext(redirect_stderr(io.StringIO()))
         self.run = self.enterContext(patch("uvicorn.run"))
         self.argv = ["--checkout", str(ROOT), "--bind", "100.64.0.1"]
         self.enterContext(patch.dict(os.environ, {"USERPROFILE": str(ROOT)}))
@@ -204,34 +203,49 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(bridge.main(self.argv + flags), 2)
         self.run.assert_not_called()
 
-    def test_readonly_startup_modes_and_default_no_lookup(self):
+    def test_missing_peers_prints_migration_hint_only_for_readonly_default(self):
+        message = "[HOLD] v0.3.0 defaults to Tailscale identity. To keep using a token, start with --auth token."
+        for flags in ([], ["--auth", "tailscale"], ["--auth", "both"], ["--mode", "exec"]):
+            with self.subTest(flags=flags), \
+                    patch.object(bridge, "load_peers", side_effect=FileNotFoundError("synthetic private path")), \
+                    patch.object(bridge, "load_token") as token:
+                self.errors.seek(0)
+                self.errors.truncate()
+                self.assertEqual(bridge.main(self.argv + flags), 2)
+                expected = ["[HOLD] Peer allow-list missing, invalid or empty for this mode."]
+                if not flags:
+                    expected.append(message)
+                self.assertEqual(self.errors.getvalue().splitlines(), expected)
+                token.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_readonly_startup_modes_default_to_tailscale(self):
         from sora_commander_next.allowed_roots import AllowedRoots
-        folder = Path(self.enterContext(inherited_test_temp()))
-        profile = folder / "profile"
-        local = profile / "AppData" / "Local"
-        local.mkdir(parents=True)
-        self.enterContext(patch.dict(os.environ, {"USERPROFILE": str(profile), "LOCALAPPDATA": str(local)}))
-        config = profile / ".config" / "sora-commander" / "allowed-roots.txt"
-        config.parent.mkdir(parents=True)
-        config.write_text(str(ROOT) + "\n", encoding="utf-8")
         server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()))
         with patch.object(bridge, "load_peers", return_value={"readonly": ["muse-node"], "exec": []}) as peers, \
                 patch.object(bridge, "load_token", return_value=TOKEN) as token, \
                 patch.object(bridge, "transport_lists", wraps=bridge.transport_lists) as transport, \
+                patch("sora_commander_next.allowed_roots._locations",
+                      return_value=(ROOT, Path(__file__).resolve(), (), ())), \
                 patch("sora_commander_next.allowed_roots.startup_allowed_roots",
                       return_value=AllowedRoots((str(ROOT),), ())), \
                 patch("sora_commander_next.mcp_adapter.build_server", return_value=server):
-            for flags, auth in (([], "token"), (["--auth", "tailscale"], "tailscale"),
+            for flags, auth in (([], "tailscale"), (["--auth", "tailscale"], "tailscale"),
+                                (["--auth", "token"], "token"),
                                 (["--auth", "both"], "both")):
                 token.reset_mock()
+                peers.reset_mock()
                 self.assertEqual(bridge.main(self.argv + flags), 0)
                 gate = self.run.call_args.args[0]
                 self.assertEqual(gate.auth, auth)
                 self.assertEqual(token.call_count, int(auth != "tailscale"))
                 self.assertFalse(self.run.call_args.kwargs["proxy_headers"])
-                if not flags:
+                if auth == "token":
                     peers.assert_not_called()
                     self.assertIsNone(gate.identity)
+                else:
+                    peers.assert_called_once()
+                    self.assertEqual(gate.identity.allowed, frozenset({"muse-node"}))
             self.assertFalse(transport.call_args.kwargs["allow_magicdns"])
 
 

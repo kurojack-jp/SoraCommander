@@ -145,11 +145,11 @@ class MainTests(unittest.TestCase):
         self.server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()))
         self.built = self.enterContext(patch("sora_commander_next.mcp_adapter.build_server", return_value=self.server))
 
-    def test_default_readonly_host_and_banner_are_preserved(self):
+    def test_readonly_token_mode_host_and_banner_are_preserved(self):
         roots = AllowedRoots((str(ROOT),), (str(ROOT / "docs"),))
         with patch("sora_commander_next.allowed_roots.startup_allowed_roots", return_value=roots), \
                 patch.object(bridge, "load_token", return_value=READ_TOKEN) as load:
-            self.assertEqual(bridge.main(self.argv), 0)
+            self.assertEqual(bridge.main(self.argv + ["--auth", "token"]), 0)
         load.assert_called_once_with(self.profile / ".config/sora-commander/muse-bridge-token.txt")
         host = self.built.call_args.args[0]
         self.assertEqual(host.policy.roots, ())

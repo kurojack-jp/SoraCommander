@@ -8,6 +8,10 @@
 
 ## 設定
 
+v0.3.0から、読み取り専用ブリッジの既定の認証方式はTailscaleのノード識別です。
+トークンを引き続き使う場合は、`tools\start-muse-bridge.cmd --auth token`
+のように`--auth token`を指定します。
+
 1. [INSTALL](INSTALL.ja.md)に従ってPython環境を準備します。PCでTailscaleを
    導入・起動し、エージェントのノードを同じtailnetに参加させます。
 2. [muse-bridge-peers.example.json](muse-bridge-peers.example.json)を
@@ -86,6 +90,7 @@ Tailscaleの管理画面で`muse`の機器を削除し、`muse-bridge-peers.json
 ## 拒否される場合
 
 読み取りツールとコマンドは、UNCパスとWindowsデバイスパスを解決前に拒否します。
+行き先がネットワーク上（UNCパスや割り当てたネットワークドライブ）のシンボリックリンクやジャンクションも、たどる前に拒否します。
 `allowed-roots.txt`が無い場合、読み取り専用ブリッジは起動しません。
 exec用トークンには、`SORA_BRIDGE_TOKEN`を含むどの読み取り専用トークンとも異なる値を使います。
 
