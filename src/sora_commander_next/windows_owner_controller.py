@@ -40,6 +40,15 @@ def _ticket_binding(ticket):
         'request', 'roots', 'identity', 'guard', 'expires', 'authorized', 'reviewing'))
 
 
+def _finish_interactive_review(saved, status):
+    with saved.manager._lock:
+        ticket = saved.ticket
+        if saved.manager._dev_interactive_requests.get(saved.record.request.request_id) is ticket:
+            ticket['activity_review_state'] = status
+            ticket['reviewing'] = True
+            ticket['authorized'] = False
+
+
 class WindowsOwnerController(OwnerController):
     def __init__(self, host):
         super().__init__(host)
@@ -62,6 +71,7 @@ class WindowsOwnerController(OwnerController):
 
     def approve_local(self, pending_id, *, session_latch=None):
         stage, state = 'OWNER_CHECK', 'NOT_CONSUMED'
+        interactive_review = None
         try:
             policy = self.host.policy
             with policy.lock:
@@ -96,7 +106,8 @@ class WindowsOwnerController(OwnerController):
                             raise PermissionError('interactive session history and hooks required')
                         ticket = manager._dev_interactive_requests.get(record.request.request_id)
                         if (ticket is None or ticket['request'] != record.request
-                                or ticket.get('reviewing') or ticket['authorized']):
+                                or ticket.get('reviewing') or ticket['authorized']
+                                or ticket.get('activity_review_state') is not None):
                             raise PermissionError('missing interactive review')
                     saved = _ConsumedApproval(
                         record, policy, context, approval,
@@ -104,6 +115,9 @@ class WindowsOwnerController(OwnerController):
                         monotonic() + (record.expires_at - approval.clock()),
                         self._guard, session_latch, normal, dev, ticket,
                         _ticket_binding(ticket) if ticket is not None else None)
+                    if ticket is not None:
+                        ticket['activity_review_state'] = 'PENDING'
+                        interactive_review = saved
 
             def verify_session():
                 self._verify()  # pinned SID, LUID, WTS active and unlocked
@@ -171,8 +185,10 @@ class WindowsOwnerController(OwnerController):
                 _authorize_interactive_local(self.host, record.request,
                                              deadline=min(monotonic() + 45, saved.deadline),
                                              verify=verify_session,
-                                             before_launch=verify_binding)
+                                             before_launch=verify_binding,
+                                             expected_ticket=saved.ticket)
             except InteractiveReviewNoAnswer as exc:
+                _finish_interactive_review(saved, 'TIMED_OUT')
                 return {'status': 'TIMED_OUT',
                         **review_diagnostics('SECOND_GUI', exc.reason, 'EXPIRED', 'NOT_STARTED'),
                         'auto_retry': False, 'required_action': 'REPORT_AND_WAIT'}
@@ -188,8 +204,12 @@ class WindowsOwnerController(OwnerController):
                         or _ticket_binding(saved.ticket)[:5] != saved.ticket_binding[:5]
                         or monotonic() >= saved.ticket['expires']):
                     raise PermissionError('interactive ticket changed during second GUI')
+                saved.ticket.pop('activity_review_state')
+                interactive_review = None
                 return self._launch(record, state)
         except Exception:
+            if interactive_review is not None:
+                _finish_interactive_review(interactive_review, 'ERROR')
             return {"status": "ERROR", "error": "OwnerAuthorizationRequired",
                     **review_diagnostics(stage, 'AUTHORIZATION_FAILED', state, 'NOT_STARTED')}
 

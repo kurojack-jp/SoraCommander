@@ -13,14 +13,14 @@ STATES = frozenset({
     "PENDING", "REVIEW", "RUNNING", "COMPLETED", "FAILED", "ERROR", "DENY",
     "DENIED", "UNKNOWN", "OUTCOME_UNKNOWN", "BUSY", "CANCELLING", "CANCELLED",
     "TIMEOUT", "TIMED_OUT", "OUTPUT_LIMIT", "OUTPUT_INCOMPLETE", "SENT",
-    "CREATED_LOCAL_DEV", "REPLACED_LOCAL_DEV", "UNCHANGED_LOCAL_DEV",
+    "CREATED", "CREATED_LOCAL_DEV", "REPLACED_LOCAL_DEV", "UNCHANGED_LOCAL_DEV",
     "DENY_DUPLICATE_UNKNOWN", "DENY_DUPLICATE_EXPIRED", "DENY_DUPLICATE_CONFLICT",
     "DENY_REPLAY_GUARD_FULL", "DENY_UNPROTECTED_WORKER",
 })
 ACTIVE = frozenset({"PENDING", "REVIEW", "RUNNING", "CANCELLING"})
 KINDS = {"request_id": 32, "pending_id": 32, "session_id": 48}
-OPERATIONS = {"command", "send_input", "text_edit", "text_create", "unknown"}
-SOURCES = {"job", "review", "input", "edit", "retired", "activity_only"}
+OPERATIONS = {"command", "send_input", "text_edit", "text_create", "inbox_drop", "unknown"}
+SOURCES = {"job", "review", "input", "edit", "retired", "activity_only", "inbox"}
 ACTIONS = {"OBSERVE_EXISTING", "MANUAL_RECONCILIATION", "REPORT_AND_WAIT",
            "CHOOSE_LABELLED_ID", "CORRECT_READ_ARGUMENTS"}
 ROUTES = {"request_status": "request_id", "review_status": "pending_id",
@@ -114,6 +114,14 @@ def validate_record(value):
     for key in ("state", "review_state", "job_state"):
         if value[key] is not None and (type(value[key]) is not str or value[key] not in STATES):
             raise InvalidMetadata()
+    inbox = value["operation_type"] == "inbox_drop"
+    if value["state"] == "CREATED" and (not inbox or value["state_source"] != "inbox"):
+        raise InvalidMetadata()
+    if value["review_state"] == "CREATED" or value["job_state"] == "CREATED":
+        raise InvalidMetadata()
+    if inbox and (not valid_id(value["pending_id"], 32) or any(
+            value[key] is not None for key in ("request_id", "session_id", "review_state", "job_state"))):
+        raise InvalidMetadata()
     for key in ("created_at", "updated_at", "finished_at"):
         stamp = value[key]
         if stamp is not None:
@@ -385,6 +393,10 @@ def observe(host, values):
                     if i not in consumed:
                         rows.append(_merge(old, commands[i]))
                         consumed.add(i)
+            elif old["state_source"] == "inbox":
+                # A completed, data-only inbox drop: no live source to merge,
+                # and nothing uncertain to reconcile. Report it as recorded.
+                rows.append(dict(old))
             else:
                 state = (old["state"] if old["state_source"] == "activity_only"
                          and old["state"] not in ACTIVE else "OUTCOME_UNKNOWN")

@@ -143,6 +143,10 @@ def _validate_arguments(name, arguments):
                     {"message", "ttl_ms", "wait_seconds"}),
         "ping": (set(), set()), "status": (set(), set()),
         "tool_catalog": (set(), set()),
+        # Muse readonly bridge only; inbox_drop also requires --inbox.
+        "bridge_digest": (set(), {"activity_limit"}),
+        "inbox_drop": ({"filename", "content"}, set()),
+        "exec_pair": ({"code"}, set()),
     }
     required, optional = fields[name]
     if not isinstance(arguments, dict) or not required <= arguments.keys() or arguments.keys() - required - optional:
@@ -158,6 +162,16 @@ def _validate_arguments(name, arguments):
                 or type(wait) not in (int, float) or isinstance(wait, bool)
                 or not math.isfinite(wait) or not 0 <= wait <= 90):
             raise ValueError("invalid task request")
+    if name == "bridge_digest":
+        limit = arguments.get("activity_limit", 5)
+        if type(limit) is not int or not 0 <= limit <= 20:
+            raise ValueError("invalid digest activity limit")
+    if name == "inbox_drop" and not all(type(arguments[key]) is str
+                                        for key in ("filename", "content")):
+        raise ValueError("invalid inbox request")
+    if name == "exec_pair" and (type(arguments["code"]) is not str
+                                or not 1 <= len(arguments["code"]) <= 32):
+        raise ValueError("invalid pairing request")
     if name == "send_input":
         from .dev_rdc_compat import validate_input
         validate_input(**arguments)

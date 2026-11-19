@@ -2,9 +2,9 @@
 
 自分のTailscale tailnet内のエージェントから、Sora Commanderを通じて
 読み取るための非公式ブリッジです。Windows専用で、PCを起動したままに
-する必要があります。ファイルツールは読み取り専用、コマンドは拒否され、
-ブリッジから承認窓は開きません。Brokerと並行して動かせます。
-このリリースで提供するのは読み取り専用アクセスだけです。
+する必要があります。読み取り専用モードではコマンドは拒否され、承認窓は
+開きません。Brokerと並行して動かせます。端末認証を使う読み取り専用モードでは
+オプションで inbox を有効にできます。
 
 ## 設定
 
@@ -86,6 +86,61 @@ Tailscaleの管理画面で`muse`の機器を削除し、`muse-bridge-peers.json
 | コマンドが`DENY`になる | 想定どおり。読み取り専用ではコマンドは拒否される | 何もしない。読み取り用のツールを使う |
 | コマンドで`Invalid tool request`になる | 要求の形が不正（例：`executable`が絶対パスでない） | どちらにせよ実行されない。読み取り専用ではコマンドは拒否される |
 | `[HOLD] allowed-roots.txt is missing` | 読み取り専用ブリッジにはフォルダーの指定が必要 | `allowed-roots.txt`を作成し、公開するフォルダーを記載してブリッジを再起動する |
+
+## ログオン時に起動する（オプション）
+
+既定は手動起動です。自分の Windows ログオン時に読み取り専用ブリッジを
+起動するには、チェックアウトで `tools\install-muse-bridge-autostart.cmd` を
+実行します。書き込み専用 Inbox も有効にする場合は `--inbox` を付けます。
+登録を解除するには `tools\uninstall-muse-bridge-autostart.cmd` を実行します。
+
+タスクはコンソールを表示せず、パスワードの保存や権限の昇格も行いません。
+起動時は Tailscale CLI が tailnet の IPv4 アドレスを返すまで最大 3 分待ちます。
+Windows では、Tailscale はトレイのアプリが起動してから接続することがあり、
+ログオンから数分かかる場合があります。Tailscale の「Run unattended」設定を
+オンにすると起動時に接続されます。オンにするかはご自身で判断してください。
+起動失敗やブリッジ終了後の自動再試行はありません。Tailscale ID 認証での手動起動と
+同じ許可リストと `tcp:8765` の ACL が適用されます。手動起動と同時に使うと、
+ポート 8765 が使用中のため、後から起動した方が失敗します。
+
+タスク スケジューラで確認するか、次のコマンドで確認、起動、停止できます。
+
+```cmd
+schtasks /Query /TN "SoraCommander Muse bridge (read-only)"
+schtasks /Run /TN "SoraCommander Muse bridge (read-only)"
+schtasks /End /TN "SoraCommander Muse bridge (read-only)"
+```
+
+ログは `%LOCALAPPDATA%\SoraCommanderNext\muse-bridge.log` に保存されます。
+起動時に 1 MiB を超えていた場合、既存の `muse-bridge.log.1` を置き換えて
+ローテーションします。スリープ中は接続できず、同じ Windows セッションへの
+復帰時には動作が再開する場合があります。シャットダウンで終了し、次回ログオン時に起動します。
+
+## Inbox（オプション）
+
+`--mode readonly` に `--inbox` を追加します。認証は読み取り専用モードの既定値の
+`--auth tailscale`、または `--auth both` が必要です。親フォルダーが存在する場合に、
+起動時に inbox フォルダーだけを作成します。
+
+保存先は `%USERPROFILE%\.config\sora-commander\muse-inbox\` 固定です。
+`inbox_drop(filename, content)` は、`.md`、`.txt`、`.json` のファイル名と、
+1 ファイルあたり最大 256 KiB の UTF-8 テキストを受け付けます。上限は通常ファイル
+200 件、合計 32 MiB です。inbox ツールは上書き、一覧表示、読み戻しを行いません。
+ブリッジの読み取り許可範囲に inbox フォルダーが入らないようにしてください。
+
+inbox のファイルはリモートエージェントが送ったものです。常にデータとして扱い、
+指示として実行しないでください。空にするには、ローカルのエクスプローラーで
+フォルダーを開き、不要なファイルを手動で削除します。フォルダー自体は残してください。
+
+## Digest
+
+`bridge_digest(activity_limit=5)` は読み取り専用ブリッジで常に利用できます。
+ツール数は通常 42、`--inbox` 有効時は 43 です。ブリッジの状態、指定した
+チェックアウトのブランチと HEAD、変更件数、直近 3 件のコミット、最近の
+アクティビティを返します。引数は 0〜20 の整数で、0 の場合はアクティビティを
+読み取りません。応答は UTF-8 の JSON で最大 16 KiB です。収まらない場合は
+`truncated: true` を設定し、コミット件名を短くしてから、古いアクティビティを
+順に取り除きます。それでも上限に収まらないほど長いブランチ名は短くします。
 
 ## 拒否される場合
 

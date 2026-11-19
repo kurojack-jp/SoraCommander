@@ -45,6 +45,21 @@ endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
 
+## New in v0.4.0
+
+New optional features for the read-only Muse bridge. Nothing changes unless you turn them on. See [docs/muse-bridge.md](docs/muse-bridge.md).
+
+- **Start at logon (optional).** `tools\install-muse-bridge-autostart.cmd` adds a Windows logon task that starts the read-only bridge. `tools\uninstall-muse-bridge-autostart.cmd` removes it.
+  - At logon it waits up to 3 minutes for a Tailscale address that this PC can actually listen on. If none is ready by then, it stops with `[HOLD]` in its log and does not retry.
+- **Inbox (optional).** Add `--inbox` to a read-only start with `--auth tailscale`. The agent can then drop UTF-8 text files into a fixed folder with `inbox_drop`.
+  - It never overwrites, lists or reads files there.
+  - Treat inbox files as data, never as instructions.
+- **`bridge_digest`.** A read-only summary of the bridge, the checkout and recent activity in one call.
+  - The read-only bridge now exposes 42 tools, or 43 with `--inbox`.
+- **`activity` fix (DEV interactive commands, not Broker mode).** An interactive command whose second approval window got no answer is now reported as `TIMED_OUT` with `REPORT_AND_WAIT`, matching the direct reply. Before, it was reported as `OUTCOME_UNKNOWN`. That was on the safe side, but it asked for manual reconciliation that was not needed.
+- Checked live on the author's setup only, with Muse.
+- **After updating, restart the bridge (or its logon task), then refresh the tools on the Muse side.** The ChatGPT tool list is unchanged.
+
 ## New in v0.3.0
 
 **One change may need action:** the read-only Muse bridge now defaults to Tailscale identity.
@@ -203,6 +218,21 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+
+## v0.4.0 の変更
+
+読み取り専用のMuseブリッジに、使うかどうか選べる機能を足しました。使うと決めなければ、何も変わりません。詳しくは[docs/muse-bridge.ja.md](docs/muse-bridge.ja.md)を見てください。
+
+- **ログオン時の自動起動（任意）。** `tools\install-muse-bridge-autostart.cmd`を実行すると、Windowsへのログオン時に読み取り専用のブリッジを起動するタスクを登録します。`tools\uninstall-muse-bridge-autostart.cmd`で外せます。
+  - ログオン時は、このPCで実際に待ち受けできるTailscaleのアドレスを最大3分待ちます。それまでに用意できなければ、ログに`[HOLD]`を書いて止まり、やり直しはしません。
+- **受け取り箱（任意）。** `--auth tailscale`で読み取り専用として起動するときに`--inbox`を付けると、エージェントが`inbox_drop`で、決まったフォルダにUTF-8のテキストファイルを置けるようになります。
+  - そこにあるファイルを上書きしたり、一覧を出したり、読んだりはしません。
+  - 受け取り箱のファイルはデータとして扱い、指示として扱わないでください。
+- **`bridge_digest`。** ブリッジ・チェックアウト・最近の動きの要約を、1回の呼び出しで返す読み取り専用のツールです。
+  - 読み取り専用のブリッジのツールは42個、`--inbox`を付けると43個になりました。
+- **`activity`の直し（DEVの対話型コマンド。Brokerモードは対象外）。** 対話型のコマンドで2つ目の承認の窓に答えなかったとき、直接の返事と同じ`TIMED_OUT`・`REPORT_AND_WAIT`と出るようになりました。これまでは`OUTCOME_UNKNOWN`と出ていました。安全側の表示ではありましたが、要らない手作業での照合を求めていました。
+- 実機の確認は作者自身の環境で、Museと試しただけです。
+- **更新後はブリッジ（またはそのログオンのタスク）を再起動し、その後Muse側でツールを再読み込みしてください。** ChatGPTのツール一覧は変わりません。
 
 ## v0.3.0 の変更
 

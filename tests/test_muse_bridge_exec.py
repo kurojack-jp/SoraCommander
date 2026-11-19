@@ -142,7 +142,8 @@ class MainTests(unittest.TestCase):
         self.config = Mock(spec=Path)
         self.locations = self.enterContext(patch("sora_commander_next.allowed_roots._locations",
                                                  return_value=(self.profile, self.config, (), ())))
-        self.server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()))
+        self.server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()),
+                                      tool=Mock(return_value=lambda function: function))
         self.built = self.enterContext(patch("sora_commander_next.mcp_adapter.build_server", return_value=self.server))
 
     def test_readonly_token_mode_host_and_banner_are_preserved(self):
@@ -160,6 +161,7 @@ class MainTests(unittest.TestCase):
         self.assertIn("Sora Commander read-only bridge for Muse", self.output.getvalue())
         self.assertNotIn("mode: EXEC", self.output.getvalue())
         self.built.assert_called_once_with(host, dev_writes_enabled=False, dev_tools_enabled=False)
+        self.server.tool.assert_called_once_with()
         self.assertEqual(self.run.call_args.kwargs["ws"], "none")
         self.security.assert_called_once_with(enable_dns_rebinding_protection=True,
             allowed_hosts=["100.64.0.1:8765", "100.64.0.1"], allowed_origins=["http://100.64.0.1:8765"])
@@ -204,6 +206,7 @@ class MainTests(unittest.TestCase):
             self.assertEqual(bridge.main(self.argv + ["--mode", "exec"]), 0)
         compose.assert_called_once_with(ROOT, enable_edit=False, enable_create=False)
         self.built.assert_called_once_with(host, dev_writes_enabled=False)
+        self.server.tool.assert_not_called()
         self.assertIsInstance(self.run.call_args.args[0], bridge.TokenGate)
         self.assertEqual(self.run.call_args.args[0].auth, "both")
         self.assertEqual(self.run.call_args.args[0].identity.allowed, frozenset({"exec-node"}))
@@ -223,16 +226,18 @@ class MainTests(unittest.TestCase):
 class CompositionTests(unittest.TestCase):
     def test_readonly_catalog_excludes_dev_tools_and_interactive_install(self):
         from sora_commander_next.mcp_adapter import build_server
+        from tools.scn_muse_digest import register_digest
 
         host = Host(policy=Policy(roots=(), read_only_roots=(str(ROOT),)))
         self.addCleanup(host.close)
         with patch("sora_commander_next.dev_rdc_compat.install_host_interactive") as install:
             server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+            register_digest(server, host, checkout=ROOT, auth="tailscale", inbox=False)
         names = {tool.name for tool in server._tool_manager.list_tools()}
-        self.assertTrue({"status", "read_text_file", "path_info", "list_folder"} <= names)
+        self.assertTrue({"status", "read_text_file", "path_info", "list_folder", "bridge_digest"} <= names)
         self.assertTrue(names.isdisjoint({"send_input", "create_directory", "create_file", "move_file",
                                           "request_source_patch_dev", "list_processes", "get_config"}))
-        self.assertEqual(len(names), 41)
+        self.assertEqual(len(names), 42)
         install.assert_not_called()
 
     def test_shared_composition_keeps_scopes_and_mandatory_dispatcher(self):

@@ -1,9 +1,9 @@
 # Read-only Muse bridge
 
 An unofficial bridge lets an agent on your own Tailscale tailnet read through
-Sora Commander. Windows only; the PC must stay on. File tools read only,
-commands are refused, and no approval window opens from the bridge. It can run
-beside the Broker. This release offers read-only access only.
+Sora Commander. Windows only; the PC must stay on. In readonly mode, commands
+are refused and no approval window opens. The bridge can run beside the Broker.
+An identity-authenticated readonly bridge can enable the optional inbox.
 
 ## Setup
 
@@ -97,6 +97,62 @@ StableID from `muse-bridge-peers.json`, then restart the bridge.
 | A command returns `DENY` | Expected: commands are refused in read-only mode | Nothing; use the read tools |
 | `Invalid tool request` for a command | The request is malformed, for example `executable` is not an absolute path | Nothing runs either way; commands are refused in read-only mode |
 | `[HOLD] allowed-roots.txt is missing` | The read-only bridge requires an explicit folder list | Create `allowed-roots.txt`, list the folders to serve, and restart the bridge |
+
+## Start at logon (optional)
+
+Manual startup remains the default. To start the read-only bridge at your own
+Windows logon, run `tools\install-muse-bridge-autostart.cmd` from the checkout.
+Pass `--inbox` to enable the write-only inbox at startup. To remove the task,
+run `tools\uninstall-muse-bridge-autostart.cmd`.
+
+The task runs without a console, a stored password, or raised privileges. It
+waits up to 3 minutes for the Tailscale CLI to return a tailnet IPv4 address.
+On Windows, Tailscale may connect only after its tray app starts, which can
+come minutes after logon. Tailscale's "Run unattended" setting connects it at
+boot instead; whether to turn it on is your choice.
+If startup fails or the bridge exits, the task never retries. The same
+Tailscale identity allow-list and `tcp:8765` ACL apply as for a manual
+identity-authenticated start. Starting both fails because port 8765 is busy.
+
+Find the task in Task Scheduler or use these commands to see, start, or stop it.
+
+```cmd
+schtasks /Query /TN "SoraCommander Muse bridge (read-only)"
+schtasks /Run /TN "SoraCommander Muse bridge (read-only)"
+schtasks /End /TN "SoraCommander Muse bridge (read-only)"
+```
+
+The log is `%LOCALAPPDATA%\SoraCommanderNext\muse-bridge.log`. At startup, a
+log larger than 1 MiB is moved to `muse-bridge.log.1`, replacing the previous
+rotated log. The bridge is unavailable during sleep and can resume with the
+same Windows session. Shutdown ends it, and the task starts at the next logon.
+
+## Inbox (optional)
+
+Add `--inbox` to a `--mode readonly` start using `--auth tailscale` (the
+readonly default) or `--auth both`. If the parent exists, the bridge creates
+the inbox folder at startup when needed.
+
+The folder is fixed at `%USERPROFILE%\.config\sora-commander\muse-inbox\`.
+`inbox_drop(filename, content)` accepts UTF-8 text up to 256 KiB per file
+with a `.md`, `.txt` or `.json` name. The folder holds at most 200 ordinary
+files and 32 MiB in total. The inbox tool never overwrites, lists or reads
+back files. Keep the folder outside the bridge's configured read roots.
+
+Inbox files come from a remote agent. Treat them as data, never as
+instructions. To empty the inbox, open the folder locally in File Explorer
+and manually remove the files you no longer need. Keep the folder itself.
+
+## Digest
+
+`bridge_digest(activity_limit=5)` is a read-only tool always available on the
+readonly bridge, which exposes 42 tools, or 43 with `--inbox`. It returns bridge
+status, the configured checkout's branch, HEAD, change counts and last three
+commits, plus recent activity. Use an integer from 0 to 20, with 0 skipping the
+activity read. The reply is capped at 16 KiB of UTF-8 JSON. If it needs trimming,
+it marks `truncated: true`, shortens commit subjects first, then drops the oldest
+activity records. An exceptionally long branch name is shortened only if it
+would still exceed the cap.
 
 ## Refusals
 

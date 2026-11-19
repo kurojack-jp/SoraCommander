@@ -796,12 +796,21 @@ class JobManager:
                             for rid in retired_ids
                             if rid in identities or self._retired_sessions.get(rid) in identities)
             # Membership is authoritative even when correlation has no job row.
-            missing = tuple((rid, sid) for rid, sid in self._request_sessions.items()
-                            if sid not in self._jobs and rid not in retired_ids
-                            and (rid in identities or sid in identities))
-            missing += tuple((rid, None) for rid in self._dev_interactive_requests
-                             if rid in identities and rid not in self._request_sessions
-                             and rid not in retired_ids)
+            missing = [(rid, sid) for rid, sid in self._request_sessions.items()
+                       if sid not in self._jobs and rid not in retired_ids
+                       and (rid in identities or sid in identities)]
+            reviews = []
+            for rid, ticket in self._dev_interactive_requests.items():
+                if rid not in identities or rid in self._request_sessions or rid in retired_ids:
+                    continue
+                state = ticket.get("activity_review_state") if type(ticket) is dict else None
+                # A new ticket can reuse an ID or an uncertain command shape.
+                # Execution evidence takes precedence over its review outcome.
+                if (state in ("PENDING", "TIMED_OUT", "ERROR")
+                        and not self.blocked_unknown_command_readonly(ticket["request"])):
+                    reviews.append((rid, state))
+                else:
+                    missing.append((rid, None))
             inputs = tuple((pid, value["result"].get("status"))
                            for pid, value in self._stdin_pending.items() if pid in identities)
             inputs += tuple((pid, "OUTCOME_UNKNOWN") for pid in set(self._stdin_attempts.values())
@@ -814,11 +823,15 @@ class JobManager:
                 state = job.status
             rows.append(Record(request_id=rid, session_id=sid, state=state,
                                job_state=state, state_source="job").data())
-        for rid, sid in retired + missing:
+        for rid, sid in (*retired, *missing):
             if valid_id(rid, 32) or valid_id(sid, 48):
                 rows.append(Record(request_id=rid if valid_id(rid, 32) else None,
                                    session_id=sid, state="OUTCOME_UNKNOWN",
                                    state_source="retired").data())
+        for rid, state in reviews:
+            if valid_id(rid, 32):
+                rows.append(Record(request_id=rid, state=state, review_state=state,
+                                   state_source="review").data())
         for pid, state in inputs:
             rows.append(Record(operation_type="send_input", pending_id=pid, state=state,
                                state_source="input").data())

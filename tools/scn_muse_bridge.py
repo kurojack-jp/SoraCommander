@@ -1,13 +1,13 @@
 """Muse bridge for Sora Commander (DEV, Owner-run).
 
 Serves the Owner's Sora Commander Host over Streamable HTTP, bound ONLY to
-this PC's Tailscale address. Readonly defaults to token authentication;
-optional node identity uses exact StableIDs. Exec always requires both.
+this PC's Tailscale address. Readonly defaults to Tailscale identity.
+Exec requires node identity plus its dedicated token or one-time pairing.
 
 Safety shape:
 - In readonly, roots come from the Owner's own allowed-roots.txt; every root is
   demoted to read-only for this bridge (Policy roots=()): file tools can
-  read, nothing can be created, edited or moved through this process.
+  read. The optional identity-gated inbox is a separate write-only tool.
 - In readonly no Owner review dispatcher is attached, so commands cannot be
   approved here; they return DENY. No approval window opens from this
   process.
@@ -140,6 +140,9 @@ class PeerIdentity:
         self._announced = set()
 
     def accepts(self, ip):
+        return self.lookup(ip) is not None
+
+    def lookup(self, ip) -> str | None:
         with self._lock:
             cached = self._cache.get(ip)
             if cached is not None and self.clock() < cached[0]:
@@ -163,8 +166,9 @@ class PeerIdentity:
                     self._announced.add(stable_id)
             if not accepted:
                 print(f"[bridge] peer refused: {reason}")
-            self._cache[ip] = (self.clock() + (60 if accepted else 5), accepted)
-            return accepted
+            allowed_id = stable_id if accepted else None
+            self._cache[ip] = (self.clock() + (60 if accepted else 5), allowed_id)
+            return allowed_id
 
 
 def transport_lists(bind, port, *, allow_magicdns=False, runner=subprocess.run,
@@ -247,7 +251,7 @@ class TokenGate:
     def __init__(self, app, token: str, *, auth="token", identity=None):
         self.app = app
         self.token = token.encode()
-        if auth not in {"token", "tailscale", "both"} or (auth != "token" and identity is None):
+        if auth not in {"token", "tailscale", "both", "pairing"} or (auth != "token" and identity is None):
             raise ValueError("invalid authentication configuration")
         self.auth, self.identity = auth, identity
 
@@ -261,7 +265,7 @@ class TokenGate:
         if scope_type == "http":
             headers = dict(scope.get("headers") or [])
             presented = headers.get(TOKEN_HEADER, b"")
-            accepted = self.auth == "tailscale" or hmac.compare_digest(presented, self.token)
+            accepted = self.auth in {"tailscale", "pairing"} or hmac.compare_digest(presented, self.token)
             if not accepted:
                 print("[bridge] peer refused: token required")
             if accepted and self.auth != "token":
@@ -273,7 +277,10 @@ class TokenGate:
                     valid_ip = False
                 if valid_ip:
                     import anyio
-                    accepted = await anyio.to_thread.run_sync(self.identity.accepts, str(ip))
+                    stable_id = await anyio.to_thread.run_sync(self.identity.lookup, str(ip))
+                    accepted = stable_id is not None
+                    if accepted:
+                        scope.setdefault("state", {})["muse_stable_id"] = stable_id
                 else:
                     accepted = False
                     print("[bridge] peer refused: invalid source")
@@ -294,7 +301,9 @@ def main(argv=None) -> int:
                         help="This PC's Tailscale IPv4 address (100.64.0.0/10 only)")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--mode", choices=("readonly", "exec"), default="readonly")
-    parser.add_argument("--auth", choices=("token", "tailscale", "both"), default=None)
+    parser.add_argument("--auth", choices=("token", "tailscale", "both", "pairing"), default=None)
+    parser.add_argument("--inbox", action="store_true",
+                        help="Enable the write-only inbox in identity-authenticated readonly mode")
     parser.add_argument("--allow-magicdns", action="store_true")
     parser.add_argument("--enable-dev-writes", action="store_true")
     parser.add_argument("--enable-edit-pilot", action="store_true")
@@ -304,9 +313,13 @@ def main(argv=None) -> int:
         default=None,
     )
     args = parser.parse_args(argv)
-    if args.mode == "exec" and args.auth not in (None, "both"):
-        parser.error("exec mode requires --auth both")
+    if args.mode == "exec" and args.auth not in (None, "both", "pairing"):
+        parser.error("exec mode requires --auth both or pairing")
+    if args.mode == "readonly" and args.auth == "pairing":
+        parser.error("--auth pairing requires --mode exec")
     auth = args.auth or ("both" if args.mode == "exec" else "tailscale")
+    if args.inbox and (args.mode != "readonly" or auth == "token"):
+        parser.error("--inbox requires --mode readonly and --auth tailscale or both")
     if args.mode == "readonly" and any((args.enable_dev_writes, args.enable_edit_pilot, args.enable_create_pilot)):
         parser.error("write opt-ins require --mode exec")
     if args.mode == "exec" and args.port != 8765:
@@ -342,8 +355,8 @@ def main(argv=None) -> int:
                       file=sys.stderr)
             return 2
 
+    token = ""
     if args.mode == "readonly":
-        token = ""
         if auth != "tailscale":
             if args.token_file is None:
                 home = Path(os.environ.get("USERPROFILE", ""))
@@ -354,7 +367,7 @@ def main(argv=None) -> int:
             else:
                 readonly_file = Path(args.token_file)
             token = load_token(readonly_file)
-    else:
+    elif auth == "both":
         token_file = (Path(os.environ.get("USERPROFILE", "")) / ".config" / "sora-commander" / EXEC_TOKEN_NAME
                       if args.token_file is None else Path(args.token_file))
         try:
@@ -380,6 +393,8 @@ def _serve_bridge(args, checkout, token, auth, identity):
     from sora_commander_next.policy import Policy
 
     host = None
+    pairing = None
+    inbox_enabled = getattr(args, "inbox", False)
     try:
         if args.mode == "readonly":
             try:
@@ -399,11 +414,33 @@ def _serve_bridge(args, checkout, token, auth, identity):
             # Every allowed root is demoted to read-only here: Policy roots stay empty.
             host = Host(policy=Policy(roots=(), read_only_roots=read_all))
             server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+            if __package__:
+                from .scn_muse_digest import register_digest
+            else:
+                from scn_muse_digest import register_digest
+            register_digest(server, host, checkout=checkout, auth=auth, inbox=inbox_enabled)
+            if inbox_enabled:
+                if __package__:
+                    from .scn_muse_inbox import InboxUnavailable, register_inbox
+                else:
+                    from scn_muse_inbox import InboxUnavailable, register_inbox
+                try:
+                    register_inbox(server, host._activity_store, os.environ.get("USERPROFILE", ""))
+                except (InboxUnavailable, OSError) as error:
+                    print(f"[HOLD] Inbox unavailable: {error}", file=sys.stderr)
+                    return 2
         else:
             try:
                 host = build_exec_host(checkout, enable_edit=args.enable_edit_pilot,
                                        enable_create=args.enable_create_pilot)
                 server = build_server(host, dev_writes_enabled=args.enable_dev_writes)
+                if auth == "pairing":
+                    if __package__:
+                        from .scn_muse_pairing import Pairing, register_pairing
+                    else:
+                        from scn_muse_pairing import Pairing, register_pairing
+                    pairing = Pairing()
+                    register_pairing(server, pairing)
             except (Exception, SystemExit):
                 print("[HOLD] Exec Owner pilot construction failed; bridge not started.", file=sys.stderr)
                 return 2
@@ -422,6 +459,11 @@ def _serve_bridge(args, checkout, token, auth, identity):
 
         if args.mode == "readonly":
             print(f"[bridge] Sora Commander read-only bridge for Muse")
+            if inbox_enabled:
+                print("[bridge] read-only, plus one write-only inbox folder.")
+        elif pairing is not None:
+            print("[bridge] mode: EXEC with one-time pairing (approval window still required for every command)")
+            print(f"[bridge] pairing code: {pairing.display()} (valid 10 minutes, one use; never share it except with your agent)")
         else:
             print("[bridge] mode: EXEC (approval window required for every command)")
         print(f"[bridge] listening on http://{args.bind}:{args.port}/mcp (Tailscale only)")

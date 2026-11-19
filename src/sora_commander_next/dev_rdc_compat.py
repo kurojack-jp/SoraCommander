@@ -449,7 +449,8 @@ class _LaunchConsent:
     verify: object
 
 
-def authorize_interactive_local(host, request, *, deadline=None, verify=None, before_launch=None):
+def authorize_interactive_local(host, request, *, deadline=None, verify=None, before_launch=None,
+                                expected_ticket=None):
     """Called only AFTER existing local Owner approval was consumed.
 
     An additional explicit DEV GUI describes PIPE mode and exact launch.
@@ -460,6 +461,7 @@ def authorize_interactive_local(host, request, *, deadline=None, verify=None, be
     with manager._lock:
         record = manager._dev_interactive_requests.get(request.request_id)
         if (record is None or record['request'] != request or manager._closed
+                or (expected_ticket is not None and record is not expected_ticket)
                 or record.get('reviewing') or record['authorized']):
             raise PermissionError('missing interactive review')
         record['reviewing'] = True  # one GUI attempt, including denial/failure

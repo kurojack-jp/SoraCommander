@@ -221,7 +221,9 @@ class StartupTests(unittest.TestCase):
 
     def test_readonly_startup_modes_default_to_tailscale(self):
         from sora_commander_next.allowed_roots import AllowedRoots
-        server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()))
+        # The readonly bridge registers bridge_digest on this server (Feature 4).
+        server = SimpleNamespace(settings=SimpleNamespace(), streamable_http_app=Mock(return_value=Mock()),
+                                 tool=Mock(return_value=lambda function: function))
         with patch.object(bridge, "load_peers", return_value={"readonly": ["muse-node"], "exec": []}) as peers, \
                 patch.object(bridge, "load_token", return_value=TOKEN) as token, \
                 patch.object(bridge, "transport_lists", wraps=bridge.transport_lists) as transport, \
