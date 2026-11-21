@@ -27,6 +27,8 @@ class OwnerLockDuringMonitorTests(unittest.TestCase):
                       side_effect=lambda: self.current)
         probe.start()
         self.addCleanup(probe.stop)
+        self.unlocked = self.enterContext(patch(
+            "sora_commander_next.windows_owner.session_is_unlocked", return_value=True))
         self.host = Host(Policy((str(ROOT),), clock=lambda: self.now),
                          self.valid.sid, LocalApproval(lambda: self.now))
         self.addCleanup(self.host.jobs.close)
@@ -53,13 +55,13 @@ class OwnerLockDuringMonitorTests(unittest.TestCase):
         spawn.assert_not_called()
         # Approval was already consumed, not replayable after session unlock.
         self.current = self.valid
+        self.unlocked.return_value = True
         with patch.object(self.host.jobs, "start") as spawn:
             self.assertEqual(self.ctrl.approve_local(pending_id)["status"], "ERROR")
             spawn.assert_not_called()
 
     def test_lock_during_monitor_never_starts_job(self):
-        self.check_failure(lambda _: setattr(
-            self, "current", replace(self.valid, active=False)))
+        self.check_failure(lambda _: setattr(self.unlocked, "return_value", False))
 
     def test_logon_luid_change_during_monitor_never_starts_job(self):
         self.check_failure(lambda _: setattr(

@@ -9,6 +9,8 @@ import io
 import os
 from pathlib import Path
 import secrets
+import shutil
+import venv
 import subprocess
 import sys
 import unittest
@@ -73,6 +75,25 @@ class OwnerBrokerPipeNameTests(unittest.TestCase):
                 lease.assert_called_once_with()
                 self.assertEqual(stdout.getvalue(),
                     "[HOLD] synthetic lease refusal; Broker not started.\n")
+
+    def test_owner_storage_error_is_one_hold_line(self):
+        from types import SimpleNamespace
+        from sora_commander_next import owner_broker_main as broker
+        arguments = SimpleNamespace(list_unknown=False, resolve_unknown=None, pipe_name=None)
+        for message in ("Owner ACL invalid: owner-output-archive.json: untrusted file ACL entry",
+                        "Owner ACL unavailable: the Owner storage folder"):
+            with self.subTest(message=message), ExitStack() as stack:
+                stack.enter_context(patch("sora_commander_next.owner_ui_language.owner_ui_language",
+                                          return_value="en"))
+                stack.enter_context(patch.object(broker, "build_backend_host",
+                                                 side_effect=RuntimeError(message)))
+                stdout = stack.enter_context(redirect_stdout(io.StringIO()))
+                self.assertEqual(broker._run_with_lease(arguments, None, None), 2)
+                self.assertEqual(stdout.getvalue(), f"[HOLD] {message}. Nothing was started.\n")
+        with patch("sora_commander_next.owner_ui_language.owner_ui_language", return_value="en"), \
+                patch.object(broker, "build_backend_host", side_effect=RuntimeError("synthetic other")), \
+                self.assertRaisesRegex(RuntimeError, "^synthetic other$"):
+            broker._run_with_lease(arguments, None, None)
 
     def test_public_validator_preserves_current_pipe_names_and_tail_limits(self):
         from sora_commander_next.owner_broker_pipe import (
@@ -222,29 +243,31 @@ class OwnerBrokerMainTests(unittest.TestCase):
 @unittest.skipUnless(os.name == "nt", "Windows only")
 class BrokerModeStopTests(unittest.TestCase):
     def setUp(self):
-        self.home = Path(self.enterContext(inherited_test_temp()))
+        checkout = Path(self.enterContext(inherited_test_temp()))
+        self.home = checkout / "tools"
+        self.home.mkdir()
+        venv.EnvBuilder().create(checkout / ".venv")
         self.prefix = "SoraCommanderNext-Test-Launcher-" + secrets.token_hex(12)
-        source = (ROOT / "tools" / "start-broker-mode.cmd").read_text(encoding="utf-8")
-        # Isolate OS discovery only. Preserve the complete batch control flow,
-        # 30-second deadline, polling interval, and exit-code handling.
-        self.assertEqual(source.count("SoraCommanderNext-Broker-*"), 2)
-        self.assertEqual(source.count("Get-Process -Name 'tunnel-client'"), 1)
-        source = source.replace("SoraCommanderNext-Broker-*", self.prefix + "*")
-        source = source.replace("Get-Process -Name 'tunnel-client'",
-                                "Get-Process -Name 'scn-" + secrets.token_hex(5) + "'")
         self.launcher = self.home / "start-broker-mode.cmd"
-        self.launcher.write_bytes(source.replace("\n", "\r\n").encode("utf-8"))
+        for filename in (self.launcher.name, "scn_tunnel_client.py"):
+            shutil.copyfile(ROOT / "tools" / filename, self.home / filename)
+        # Keep the real polling and query code, targeting only synthetic names.
+        check = (ROOT / "tools" / "scn_launch_check.py").read_text(encoding="utf-8")
+        check = check.replace('"soracommandernext-broker-"', repr(self.prefix.casefold()))
+        check = check.replace('"tunnel-client.exe"', repr(self.prefix.casefold() + ".exe"))
+        (self.home / "scn_launch_check.py").write_text(check, encoding="utf-8")
         for name, marker in (("start-owner-broker-dev.cmd", "broker-called"),
                              ("start-sora-commander-broker-dev.cmd", "tunnel-called")):
             (self.home / name).write_bytes(
                 f'@echo off\r\n>"%~dp0{marker}" echo called\r\nexit /b 0\r\n'.encode("ascii"))
 
-    def run_launcher(self):
+    def run_launcher(self, *args):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("SORA_NEXT_") and key != "CONTROL_PLANE_API_KEY"}
+        env.update(USERPROFILE=str(self.home.parent), LOCALAPPDATA=str(self.home.parent))
         started = time.monotonic()
         result = subprocess.run(
-            [os.environ["COMSPEC"], "/d", "/c", str(self.launcher)],
+            [os.environ["COMSPEC"], "/d", "/c", str(self.launcher), *args],
             input="\n", capture_output=True, text=True, env=env,
             cwd=str(self.home), timeout=50, creationflags=subprocess.CREATE_NO_WINDOW)
         return result, time.monotonic() - started
@@ -255,6 +278,25 @@ class BrokerModeStopTests(unittest.TestCase):
         self.assertIn("[HOLD] The Broker pipe was not ready within 30 seconds.", result.stdout)
         self.assertGreaterEqual(elapsed, 30)
         self.assertTrue((self.home / "broker-called").is_file())
+        self.assertFalse((self.home / "tunnel-called").exists())
+
+    def test_indeterminate_query_and_unknown_code_stop_both_launchers(self):
+        helper = self.home / "scn_launch_check.py"
+        for code, message in ((7, "[HOLD] Could not check Broker pipes."), (9009, "")):
+            with self.subTest(code=code):
+                helper.write_text((f"print({message!r})\n" if message else "") +
+                                  f"raise SystemExit({code})\n", encoding="ascii")
+                result, _ = self.run_launcher()
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.count("[HOLD]"), 1)
+                self.assertNotIn("already running", result.stdout)
+                self.assertFalse((self.home / "broker-called").exists())
+                self.assertFalse((self.home / "tunnel-called").exists())
+
+    def test_check_only_propagates_child_error(self):
+        (self.home / "start-owner-broker-dev.cmd").write_bytes(b"@exit /b 2\r\n")
+        result, _ = self.run_launcher("--check")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertFalse((self.home / "tunnel-called").exists())
 
     def test_existing_pipe_stops_without_starting_either_component(self):
@@ -288,7 +330,7 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
 
     def test_broker_launcher_holds_while_a_tunnel_runs_and_has_no_key(self):
         text = self.text("start-owner-broker-dev.cmd")
-        self.assertIn("Get-Process -Name 'tunnel-client'", text)
+        self.assertIn("--tunnel-absent", text)
         self.assertIn('set "CONTROL_PLANE_API_KEY="', text)
         self.assertNotIn("Watch-NextTunnel", text)
         self.assertEqual(text.count("sora_commander_next.owner_broker_main"), 1)
@@ -319,12 +361,12 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
     def test_one_step_launcher_starts_the_broker_first_and_waits_for_its_pipe(self):
         text = self.text("start-broker-mode.cmd")
         broker = text.index('start "Sora Owner Broker" cmd.exe /d /c ""%BROKER%""')
-        wait = text.index("'*\\SoraCommanderNext-Broker-*'){exit 0}")
+        wait = text.index("--wait-broker 30")
         tunnel = text.index('call "%TUNNEL%"\n')
         self.assertLess(broker, wait)
         self.assertLess(wait, tunnel)
-        self.assertIn("if errorlevel 4 (", text)
-        self.assertIn("Get-Process -Name 'tunnel-client'", text)
+        self.assertIn('if "%RC%"=="4" (', text)
+        self.assertIn("--tunnel-absent", text)
         self.assertIn('set "CONTROL_PLANE_API_KEY="', text)
         # Only the two existing launchers start anything.
         for direct in ("owner_broker_main", "tunnel-client.exe", "--control-plane"):

@@ -203,6 +203,21 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(bridge.main(self.argv + flags), 2)
         self.run.assert_not_called()
 
+    def test_example_peer_id_never_listens(self):
+        ids = bridge.example_peer_ids(ROOT)
+        if not ids:
+            self.skipTest("docs/muse-bridge-peers.example.json is not in this tree")
+        example = {"readonly": sorted(ids), "exec": []}
+        for flags in ([], ["--auth", "both"]):
+            with self.subTest(flags=flags), patch.object(bridge, "load_peers", return_value=example):
+                self.errors.seek(0)
+                self.errors.truncate()
+                self.assertEqual(bridge.main(self.argv + flags), 2)
+                self.assertEqual(self.errors.getvalue().splitlines(),
+                                 ["[HOLD] muse-bridge-peers.json still has the example ID. "
+                                  "Replace it with your agent's StableID."])
+        self.run.assert_not_called()
+
     def test_missing_peers_prints_migration_hint_only_for_readonly_default(self):
         message = "[HOLD] v0.3.0 defaults to Tailscale identity. To keep using a token, start with --auth token."
         for flags in ([], ["--auth", "tailscale"], ["--auth", "both"], ["--mode", "exec"]):

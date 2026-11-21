@@ -6,24 +6,50 @@ if not "%BASE: =%"=="%BASE%" (
     set "RC=6"
     goto :finish
 )
+set "PYTHON=%BASE%\.venv\Scripts\python.exe"
+set "CHECK=%BASE%\tools\scn_launch_check.py"
+set "SELECTOR=%BASE%\tools\scn_tunnel_client.py"
+if not exist "%PYTHON%" (
+    py -3.13 -I -B "%SELECTOR%" --check-checkout
+    if errorlevel 7 goto :missing_python
+    if errorlevel 6 (
+        set "RC=6"
+        goto :finish
+    )
+    goto :missing_python
+)
+"%PYTHON%" -I -B "%SELECTOR%" --check-checkout
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="6" goto :finish
+if not "%RC%"=="0" goto :unexpected
 rem DEV_ONLY: starts the tunnel once with the Broker client as its MCP server.
 rem Start tools\start-owner-broker-dev.cmd first. The YAML file is not changed.
 rem --check: preflight only, nothing is started.
-set "TUNNEL=%BASE%\tools\tunnel-client\v0.0.16\tunnel-client.exe"
 set "CONFIG=%USERPROFILE%\.config\tunnel-client\sora-next.yaml"
 set "KEYFILE=%USERPROFILE%\.config\tunnel-client\sora-next.key"
 set "MCP_START=%BASE%\tools\next-development-broker-client.cmd"
-set "KEYTOOL=%BASE%\tools\Set-NextTunnelKey.ps1"
+set "KEYTOOL=%BASE%\tools\scn_tunnel_key.py"
 set "CONTROL_PLANE_API_KEY="
 
-if not exist "%KEYTOOL%" (
-    echo [HOLD] Required local component is missing: %KEYTOOL%
-    set "RC=2"
-    goto :finish
+for %%F in ("%PYTHON%" "%SELECTOR%" "%CHECK%" "%KEYTOOL%") do (
+    if not exist "%%~F" (
+        echo [HOLD] Required local component is missing: %%~F
+        set "RC=2"
+        goto :finish
+    )
 )
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%KEYTOOL%" -Check
-if errorlevel 1 (
-    set "RC=%ERRORLEVEL%"
+"%PYTHON%" -I -B "%KEYTOOL%" --check
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="7" goto :query_failed
+if "%RC%"=="6" goto :finish
+if "%RC%"=="5" goto :finish
+if "%RC%"=="4" goto :finish
+if "%RC%"=="2" goto :finish
+if not "%RC%"=="0" goto :unexpected
+set "TUNNEL="
+for /f "delims=" %%I in ('""%PYTHON%" -I -B "%SELECTOR%" --launcher-path"') do set "TUNNEL=%BASE%\%%I"
+if not defined TUNNEL (
+    set "RC=2"
     goto :finish
 )
 for %%F in ("%TUNNEL%" "%CONFIG%" "%MCP_START%") do (
@@ -34,12 +60,15 @@ for %%F in ("%TUNNEL%" "%CONFIG%" "%MCP_START%") do (
     )
 )
 rem Fail closed if a tunnel is running or its local health port cannot be taken.
-powershell.exe -NoProfile -NonInteractive -Command "if(Get-Process -Name 'tunnel-client' -ErrorAction SilentlyContinue){exit 3}; $l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,8080); try{$l.Start();$l.Stop()}catch{exit 3}; exit 0"
-if errorlevel 3 (
+"%PYTHON%" -I -B "%CHECK%" --tunnel-absent --port-free 8080
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="7" goto :query_failed
+if "%RC%"=="6" goto :finish
+if "%RC%"=="3" (
     echo [HOLD] A tunnel is already running or port 8080 is in use; do not start a second tunnel.
-    set "RC=3"
     goto :finish
 )
+if not "%RC%"=="0" goto :unexpected
 if /I "%~1"=="--check" (
     echo [OK] Tunnel prerequisites are present. Nothing started.
     set "RC=0"
@@ -51,7 +80,17 @@ echo [INFO] Single tunnel start with the Broker client. No automatic retry.
 "%TUNNEL%" run --config "%CONFIG%" --control-plane.api-key "%KEYREF%" --mcp.command "cmd.exe /d /c %MCP_FORWARD%"
 set "RC=%ERRORLEVEL%"
 echo [INFO] Tunnel finished with code %RC%.
+goto :finish
+
+:missing_python
+echo [HOLD] Development virtual environment not found: "%PYTHON%"
+goto :query_failed
+
+:unexpected
+echo [HOLD] Launch check returned unexpected exit code %RC%.
+:query_failed
+set "RC=2"
 
 :finish
-if /I not "%~1"=="--check" pause
+if not "%RC%"=="6" if /I not "%~1"=="--check" pause
 exit /b %RC%

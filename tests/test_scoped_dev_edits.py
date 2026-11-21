@@ -3,14 +3,13 @@ from dataclasses import FrozenInstanceError
 from hashlib import sha256
 import json
 import os
-import subprocess
 from pathlib import Path
-import shutil
 from threading import Event, Thread
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
-from uuid import uuid4
+from tests._inherited_test_temp import inherited_test_temp
+from tests._mock_read_boundary import canonical_fixture_admission
 
 from sora_commander_next import file_edits as edits
 from sora_commander_next import scoped_dev_edits as scoped
@@ -19,11 +18,8 @@ from sora_commander_next.file_reads import ReadBoundaryError
 
 class ScopedEditTests(unittest.TestCase):
     def setUp(self):
-        # Python 3.13 TemporaryDirectory uses mkdir(0700) on Windows, assigning
-        # a special DACL. This task forbids ACL changes; inherit a normal DACL.
-        self.folder = scoped._REPO / 'tests' / ('scoped-inherited-' + uuid4().hex)
-        self.folder.mkdir()
-        self.addCleanup(shutil.rmtree, self.folder)
+        self.folder = Path(self.enterContext(inherited_test_temp()))
+        self.enterContext(canonical_fixture_admission())
         self.target = self.folder / 'development.py'
         self.target.write_bytes(b'before\r\n')
         self.path = str(self.target)
@@ -209,6 +205,7 @@ class ScopedEditTests(unittest.TestCase):
     def test_hardlink_is_denied(self):
         linked = self.folder / 'linked.py'
         os.link(self.target, linked)
+        self.addCleanup(linked.unlink)
         self.assertEqual(self.request()['status'], 'DENIED')
         with self.assertRaises(ReadBoundaryError):
             scoped.ScopedDevelopmentEditPolicy((self.path,))
@@ -218,6 +215,7 @@ class ScopedEditTests(unittest.TestCase):
         linked = self.folder / 'symlink.py'
         try:
             linked.symlink_to(self.target)
+            self.addCleanup(linked.unlink)
         except OSError as exc:
             self.skipTest(f'unprivileged symlink unavailable: {type(exc).__name__}')
         with self.assertRaises(ReadBoundaryError):
@@ -313,22 +311,123 @@ class ScopedEditTests(unittest.TestCase):
         self.assertNotIn('scoped_dev_edits', (package / 'mcp_adapter.py').read_text())
 
 
+@unittest.skipUnless(os.name == 'nt', 'Windows ACL API')
 class ACLProtocolTests(unittest.TestCase):
-    def test_acl_subprocess_errors_and_malformed_output_are_rejected(self):
-        # Test the actual production ACL function, not the mock in policy tests.
-        p = scoped._REPO / 'src' / 'sora_commander_next' / 'stdio_main.py'
-        if os.name != 'nt':
-            with self.assertRaises(ReadBoundaryError):
-                scoped._acl_snapshot(p, 'sid')
-            return
-        for response in (SimpleNamespace(returncode=3, stdout=''),
-                         SimpleNamespace(returncode=0, stdout='not json'),
-                         SimpleNamespace(returncode=0, stdout='[]'),
-                         SimpleNamespace(returncode=0, stdout='null')):
-            with patch.object(scoped.subprocess, 'run', return_value=response), self.assertRaises(ReadBoundaryError):
-                scoped._acl_snapshot(p, 'sid')
-        with patch.object(scoped.subprocess, 'run', side_effect=subprocess.TimeoutExpired('powershell', 15)), self.assertRaises(ReadBoundaryError):
-            scoped._acl_snapshot(p, 'sid')
+    # Only the OS reads are mocked. SID, ACL decoding and SDDL use pywin32.
+    def setUp(self):
+        import win32security as sec
+
+        self.sec = sec
+        self.path = Path('X:/fixture/file.txt')
+        self.sid = 'S-1-5-21-1-2-3-1001'
+        self.token = self.enterContext(patch('win32security.OpenProcessToken')).return_value
+        self.enterContext(patch('win32security.GetTokenInformation',
+                                return_value=(sec.ConvertStringSidToSid(self.sid), 0)))
+        self.open_file = self.enterContext(patch('win32file.CreateFile'))
+        self.info = self.enterContext(patch('win32file.GetFileInformationByHandle', return_value=(0,)))
+        self.read = self.enterContext(patch('win32security.GetSecurityInfo'))
+        self.read.return_value = self.descriptor('O:SYD:(A;ID;FR;;;WD)')
+
+    def descriptor(self, sddl):
+        return self.sec.ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1)
+
+    def snapshot(self):
+        return scoped._acl_snapshot(self.path, self.sid)
+
+    def test_inherited_acl_passes_and_all_parents_are_checked_in_order(self):
+        import ntsecuritycon
+        import win32con
+        import win32file
+
+        self.read.side_effect = [self.read.return_value,
+                                 self.descriptor('O:BAD:(A;;FA;;;BA)(A;ID;FR;;;WD)'),
+                                 self.descriptor('O:SYD:(A;;FA;;;SY)')]
+        self.assertEqual(self.snapshot(), ('O:SYD:(A;ID;FR;;;WD)',
+                                           'O:BAD:(A;;FA;;;BA)(A;ID;FR;;;WD)',
+                                           'O:SYD:(A;;FA;;;SY)'))
+        self.assertEqual([c.args[0] for c in self.open_file.call_args_list],
+                         [str(part) for part in (self.path, *self.path.parents)])
+        for call in self.open_file.call_args_list:
+            self.assertEqual(call.args[1], win32con.READ_CONTROL | ntsecuritycon.FILE_READ_ATTRIBUTES)
+            self.assertTrue(call.args[5] & win32file.FILE_FLAG_OPEN_REPARSE_POINT)
+        self.assertEqual(self.open_file.return_value.Close.call_count, 3)
+        self.token.Close.assert_called_once()
+
+    def test_current_user_must_match_before_any_path_read(self):
+        self.sid = 'S-1-5-18'
+        with self.assertRaisesRegex(ReadBoundaryError, '^abnormal or unverifiable ACL$'):
+            self.snapshot()
+        self.open_file.assert_not_called()
+
+    def test_policy_rules_reject_at_target_or_parent(self):
+        valid = self.read.return_value
+        cases = [
+            ('owner', 0, 'O:WDD:(A;ID;FR;;;SY)'),
+            ('noncanonical parent', 1, 'O:SYD:(A;ID;FR;;;SY)(A;;FR;;;SY)'),
+            ('empty DACL', 0, 'O:SYD:'),
+            ('deny ACE', 2, 'O:SYD:(D;ID;FR;;;WD)'),
+            ('explicit target ACE', 0, 'O:SYD:(A;;FR;;;SY)'),
+            ('unknown rights', 1, 'O:SYD:(A;ID;0x200;;;SY)'),
+            ('generic rights', 0, 'O:SYD:(A;ID;GA;;;SY)'),
+        ]
+        for bit in range(20):
+            right = 1 << bit
+            if right & 0xD0156:
+                cases.append((f'untrusted right {right:#x}', 2, f'O:SYD:(A;;{right:#x};;;WD)'))
+        for label, index, sddl in cases:
+            with self.subTest(label=label):
+                self.read.side_effect = [valid] * index + [self.descriptor(sddl)]
+                with self.assertRaisesRegex(ReadBoundaryError, '^abnormal or unverifiable ACL$'):
+                    self.snapshot()
+                self.assertEqual(self.read.call_count, index + 1)
+                self.read.reset_mock()
+
+    def test_api_errors_and_malformed_descriptors_are_rejected(self):
+        descriptor = Mock()
+        owner = self.sec.ConvertStringSidToSid(self.sid)
+        descriptor.GetSecurityDescriptorOwner.return_value = owner
+        dacl = Mock()
+        dacl.GetAceCount.return_value = 1
+        for label, acl, ace in [('null DACL', None, None), ('unknown ACE', dacl, ((99, 16), 1, owner)),
+                                ('truncated ACE', dacl, ((0, 16),)), ('bad SID', dacl, ((0, 16), 1, None))]:
+            with self.subTest(label=label):
+                descriptor.GetSecurityDescriptorDacl.return_value = acl
+                dacl.GetAce.return_value = ace
+                self.read.return_value = descriptor
+                with self.assertRaisesRegex(ReadBoundaryError, '^abnormal or unverifiable ACL$'):
+                    self.snapshot()
+        self.read.side_effect = OSError('synthetic API error')
+        with self.assertRaisesRegex(ReadBoundaryError, '^abnormal or unverifiable ACL$'):
+            self.snapshot()
+        self.assertEqual(self.open_file.return_value.Close.call_count, 5)
+
+    def test_handle_reparse_point_is_rejected_before_security_read(self):
+        import stat
+
+        self.info.return_value = (stat.FILE_ATTRIBUTE_REPARSE_POINT,)
+        with self.assertRaisesRegex(ReadBoundaryError, '^abnormal or unverifiable ACL$'):
+            self.snapshot()
+        self.read.assert_not_called()
+        self.open_file.return_value.Close.assert_called_once()
+
+    def test_owner_or_one_ace_changes_only_its_path_record(self):
+        valid = self.read.return_value
+        before = self.snapshot()
+        self.assertEqual(before, self.snapshot())
+        for changed in ('O:BAD:(A;ID;FR;;;WD)', 'O:SYD:(A;ID;FX;;;WD)',
+                        'O:SYD:P(A;ID;FR;;;WD)', 'O:SYD:(A;CIID;FR;;;WD)'):
+            with self.subTest(changed=changed):
+                self.read.side_effect = [valid, self.descriptor(changed), valid]
+                after = self.snapshot()
+                self.assertNotEqual(before[1], after[1])
+                self.assertEqual(before[::2], after[::2])
+
+    def test_unavailable_sddl_rejects(self):
+        for value in (None, '', b'bad'):
+            with self.subTest(value=value), patch.object(
+                    self.sec, 'ConvertSecurityDescriptorToStringSecurityDescriptor', return_value=value):
+                with self.assertRaisesRegex(ReadBoundaryError, '^abnormal or unverifiable ACL$'):
+                    self.snapshot()
 
 
 class SharedGUITests(unittest.TestCase):

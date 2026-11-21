@@ -15,18 +15,25 @@ set "SORA_NEXT_RESULT_ARCHIVE_PILOT=1"
 set "SORA_NEXT_EDIT_PILOT=1"
 set "SORA_NEXT_CREATE_PILOT=1"
 set "CONTROL_PLANE_API_KEY="
-if not exist "%BASE%\.venv\Scripts\python.exe" (
-    echo [HOLD] Development virtual environment not found: %BASE%\.venv
-    set "RC=2"
-    goto :finish
+set "PYTHON=%BASE%\.venv\Scripts\python.exe"
+set "CHECK=%BASE%\tools\scn_launch_check.py"
+for %%F in ("%PYTHON%" "%CHECK%") do (
+    if not exist "%%~F" (
+        echo [HOLD] Required local component is missing: %%~F
+        set "RC=2"
+        goto :finish
+    )
 )
 rem The usual Host keeps the same job journal, so the two must never run together.
-powershell.exe -NoProfile -NonInteractive -Command "if(Get-Process -Name 'tunnel-client' -ErrorAction SilentlyContinue){exit 3}; exit 0"
-if errorlevel 3 (
+"%PYTHON%" -I -B "%CHECK%" --tunnel-absent
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="7" goto :query_failed
+if "%RC%"=="6" goto :finish
+if "%RC%"=="3" (
     echo [HOLD] A tunnel is running. Stop it first, then start the Broker before the tunnel.
-    set "RC=3"
     goto :finish
 )
+if not "%RC%"=="0" goto :unexpected
 if /I "%~1"=="--check" (
     echo [OK] Broker prerequisites are present. Nothing started.
     set "RC=0"
@@ -36,6 +43,12 @@ set "PYTHONPATH=%BASE%\src"
 "%BASE%\.venv\Scripts\python.exe" -m sora_commander_next.owner_broker_main
 set "RC=%ERRORLEVEL%"
 echo [INFO] Broker finished with code %RC%.
+goto :finish
+
+:unexpected
+echo [HOLD] Launch check returned unexpected exit code %RC%.
+:query_failed
+set "RC=2"
 
 :finish
 if /I not "%~1"=="--check" pause

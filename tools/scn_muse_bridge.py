@@ -84,6 +84,17 @@ def _unique_object(pairs):
     return result
 
 
+def example_peer_ids(checkout):
+    """StableIDs in the shipped example file; a copied placeholder must be replaced."""
+    try:
+        sample = json.loads(_bounded_file(Path(checkout) / "docs" / "muse-bridge-peers.example.json")
+                            .decode("utf-8-sig"))
+        return frozenset(value for values in sample.values() for value in values
+                         if _stable_id(value))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return frozenset()
+
+
 def _stable_id(value):
     return isinstance(value, str) and bool(value.strip()) and value.isprintable()
 
@@ -335,7 +346,11 @@ def main(argv=None) -> int:
             "(100.64.0.0/10) are allowed for this bridge."
         )
 
-    checkout = Path(args.checkout).resolve(strict=True)
+    try:
+        checkout = Path(args.checkout).resolve(strict=True)
+    except (OSError, RuntimeError):
+        print("[HOLD] The --checkout folder was not found. Bridge not started.", file=sys.stderr)
+        return 2
     sys.path.insert(0, str(checkout / "src"))
 
     identity = None
@@ -345,6 +360,11 @@ def main(argv=None) -> int:
             if not home.is_absolute():
                 raise ValueError("Owner profile unavailable")
             peers = load_peers(home / ".config" / "sora-commander" / PEERS_NAME)
+            if example_peer_ids(checkout).intersection(
+                    value for values in peers.values() for value in values):
+                print(f"[HOLD] {PEERS_NAME} still has the example ID. "
+                      "Replace it with your agent's StableID.", file=sys.stderr)
+                return 2
             if not peers[args.mode]:
                 raise ValueError("empty mode allow-list")
             identity = PeerIdentity(peers[args.mode])
@@ -387,7 +407,8 @@ def main(argv=None) -> int:
 
 
 def _serve_bridge(args, checkout, token, auth, identity):
-    from sora_commander_next.allowed_roots import _locations, startup_allowed_roots
+    from sora_commander_next.allowed_roots import (
+        AllowedRootsError, _locations, startup_allowed_roots)
     from sora_commander_next.host import Host
     from sora_commander_next.mcp_adapter import build_server
     from sora_commander_next.policy import Policy
@@ -407,13 +428,19 @@ def _serve_bridge(args, checkout, token, auth, identity):
             except Exception:
                 print("[HOLD] allowed-roots.txt could not be checked. Bridge not started.", file=sys.stderr)
                 return 2
-            roots = startup_allowed_roots(str(checkout), "development", os.environ)
+            try:
+                roots = startup_allowed_roots(str(checkout), "development", os.environ)
+            except AllowedRootsError as error:
+                # Its fixed message holds a line number and a reason, never a path.
+                print(f"[HOLD] allowed-roots.txt: {error}. Bridge not started.", file=sys.stderr)
+                return 2
             read_all = tuple(roots.read)
             if not read_all:
                 raise SystemExit("allowed-roots.txt configured no folders; nothing to serve.")
             # Every allowed root is demoted to read-only here: Policy roots stay empty.
             host = Host(policy=Policy(roots=(), read_only_roots=read_all))
-            server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+            server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False,
+                                  command_tools_enabled=False)
             if __package__:
                 from .scn_muse_digest import register_digest
             else:

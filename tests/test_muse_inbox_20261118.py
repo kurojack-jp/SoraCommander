@@ -10,6 +10,7 @@ import stat
 import sys
 import unittest
 from unittest.mock import patch
+from uuid import UUID
 
 from sora_commander_next.activity import ActivityStore, InvalidMetadata, Record
 from sora_commander_next.allowed_roots import AllowedRoots
@@ -70,7 +71,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(listen.call_count, 2)
             self.assertEqual(output.getvalue().count(
                 "[bridge] read-only, plus one write-only inbox folder."), 1)
-        self.assertEqual(counts, [42, 43])
+        self.assertEqual(counts, [36, 37])
         print("MUSE_INBOX_READONLY_TOOL_COUNTS", *counts, flush=True)
 
     def test_activity_validation(self):
@@ -109,6 +110,9 @@ class InboxFilesystemTests(unittest.TestCase):
         self.assertEqual(self.store.snapshot(), [])
 
     def test_invalid_name_and_content(self):
+        for control in ("\u202e", "\u200b", "\u2028", "\u2029"):
+            with self.subTest(control=repr(control)):
+                self.assert_refused("NAME", f"a{control}b.md")
         for name in ("../x.md", r"a\b.md", "CON.txt", "x.md.", "x" * 98 + ".md"):
             with self.subTest(name=name):
                 self.assert_refused("NAME", name)
@@ -142,7 +146,8 @@ class InboxFilesystemTests(unittest.TestCase):
         from tools.scn_muse_inbox import register_inbox
         host = Host()
         self.addCleanup(host.jobs.close)
-        server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+        server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False,
+                              command_tools_enabled=False)
         register_inbox(server, self.store, os.environ["USERPROFILE"])
         _, result = asyncio.run(server.call_tool(
             "inbox_drop", {"filename": "wire.md", "content": "inbox test"}))
@@ -175,7 +180,7 @@ class InboxFilesystemTests(unittest.TestCase):
                          ("inbox_drop", "inbox", "CREATED"))
         self.assertEqual(records[0]["pending_id"], hashlib.sha256(filename.encode()).hexdigest()[:32])
         self.assertRegex(self.output.getvalue(),
-                         rf"^\[bridge\] inbox drop: \S+Z note\.MD {len(data)} {digest}\n\Z")
+                         rf"^\[bridge\] inbox drop: \S+Z 'note\.MD' {len(data)} {digest}\n\Z")
 
     def test_existing_file(self):
         final = self.folder / "note.md"
@@ -202,3 +207,58 @@ class InboxFilesystemTests(unittest.TestCase):
     def test_write_failed_removes_temp(self):
         with patch("tools.scn_muse_inbox.os.fsync", side_effect=OSError("synthetic failure")):
             self.assert_refused("WRITE_FAILED")
+
+    def fail_unlink_for(self, temporary):
+        unlink = Path.unlink
+
+        def fail_temp_unlink(path, *args, **kwargs):
+            if path == temporary:
+                raise OSError("synthetic cleanup failure")
+            return unlink(path, *args, **kwargs)
+
+        return patch.object(Path, "unlink", autospec=True, side_effect=fail_temp_unlink)
+
+    def test_success_when_temp_cleanup_fails(self):
+        content = "受信テスト本文"
+        data = content.encode("utf-8")
+        digest = hashlib.sha256(data).hexdigest()
+        filename = "note.md"
+        final = self.folder / filename
+        # The inherited fixture only cleans up files with a single link.
+        self.addCleanup(final.unlink, missing_ok=True)
+        temp_id = UUID(int=1)
+        temporary = self.folder / f".inbox-{temp_id.hex}.tmp"
+        with (patch("tools.scn_muse_inbox.uuid4", return_value=temp_id),
+              self.fail_unlink_for(temporary) as cleanup):
+            result = self.inbox.drop(filename, content)
+
+        cleanup.assert_called_once_with(temporary)
+        self.assertEqual(result, {"status": "CREATED", "filename": filename,
+                                  "bytes": len(data), "sha256": digest})
+        self.assertEqual(final.read_bytes(), data)
+        self.assertTrue(temporary.is_file())
+        [record] = self.store.snapshot()
+        self.assertEqual((record["operation_type"], record["state_source"], record["state"]),
+                         ("inbox_drop", "inbox", "CREATED"))
+        log = self.output.getvalue()
+        self.assertNotIn(content, log)
+        cleanup_line, drop_line = log.splitlines()
+        self.assertEqual(cleanup_line, f"[bridge] inbox temp cleanup failed: {temporary.name}")
+        self.assertRegex(drop_line, rf"^\[bridge\] inbox drop: \S+Z 'note\.md' {len(data)} {digest}$")
+
+    def test_link_exists_and_temp_cleanup_fails(self):
+        final = self.folder / "note.md"
+        final.write_bytes(b"original")
+        temp_id = UUID(int=1)
+        temporary = self.folder / f".inbox-{temp_id.hex}.tmp"
+        with (patch("tools.scn_muse_inbox.uuid4", return_value=temp_id),
+              patch("tools.scn_muse_inbox.os.link", side_effect=FileExistsError) as link,
+              self.fail_unlink_for(temporary) as cleanup):
+            result = self.inbox.drop(final.name, "new content")
+
+        link.assert_called_once_with(temporary, final)
+        cleanup.assert_called_once_with(temporary)
+        self.assertEqual(result, {"status": "REFUSED", "reason": "WRITE_FAILED"})
+        self.assertEqual(final.read_bytes(), b"original")
+        self.assertEqual(self.store.snapshot(), [])
+        self.assertEqual(self.output.getvalue(), "[bridge] inbox refused: WRITE_FAILED\n")

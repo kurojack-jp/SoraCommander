@@ -53,6 +53,8 @@ class ApprovalMonitorRace(unittest.TestCase):
                            side_effect=lambda: self.current)
         self.probe.start()
         self.addCleanup(self.probe.stop)
+        self.enterContext(patch("sora_commander_next.windows_owner.session_is_unlocked",
+                                return_value=True))
         self.host = Host(Policy((str(ROOT),), clock=lambda: self.now),
                          self.valid.sid, LocalApproval(lambda: self.now))
         self.addCleanup(self.host.jobs.close)

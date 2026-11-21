@@ -5,6 +5,7 @@ the reviewed CLI job is confined to a kill-on-close Windows Job Object.
 """
 import os
 from pathlib import Path
+import stat
 import subprocess
 import time
 
@@ -27,6 +28,7 @@ def _tools_for_module(module_file):
 _TOOLS = _tools_for_module(__file__)
 _WRAPPER = _TOOLS / "Invoke-NextCodexJob.ps1"
 _MONITOR = _TOOLS / "cli-monitor.ps1"
+_PWSH7 = r"C:\Program Files\PowerShell\7\pwsh.exe"
 
 
 def _system_executable(*components, windows_root=None):
@@ -39,6 +41,28 @@ def _system_executable(*components, windows_root=None):
     if type(root) is not str or not root or not Path(root).is_absolute():
         raise RuntimeError("Windows SystemRoot unavailable")
     return str(Path(root, "System32", *components))
+
+
+def monitor_shell():
+    candidates = [_PWSH7]
+    if Path(os.environ.get("SystemRoot", "")).is_absolute():
+        candidates.insert(0, _system_executable("WindowsPowerShell", "v1.0", "powershell.exe"))
+    for executable in candidates:
+        try:
+            info = os.lstat(executable)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if stat.S_ISREG(info.st_mode) and not info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            return executable
+    raise RuntimeError("No supported PowerShell found")
+
+
+def _monitor_environment(executable):
+    # Windows environment lookup is case-insensitive, including in the child.
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    if executable != _PWSH7:
+        env["PSModulePath"] = str(Path(executable).with_name("Modules"))
+    return env
 
 
 def is_monitor_job(request):
@@ -57,35 +81,39 @@ def is_monitor_job(request):
         return False
 
 
+def _query_monitor():
+    from win32api import CommandLineToArgv
+    from win32com.client import GetObject
+
+    wmi = GetObject(r"winmgmts:\\.\root\cimv2")
+    processes = wmi.ExecQuery("SELECT CommandLine FROM Win32_Process "
+                              "WHERE Name='powershell.exe' OR Name='pwsh.exe'")
+    target = str(_MONITOR).lower()
+    for process in processes:
+        line = process.CommandLine
+        if not line:
+            continue
+        args = [arg.lower() for arg in CommandLineToArgv(line)[1:]]
+        if args.count("-file") != 1 or "-command" in args or "-encodedcommand" in args:
+            continue
+        index = args.index("-file") + 1
+        if index < len(args) and args[index] == target:
+            return True
+    return False
+
+
 def monitor_running():
-    """Windows process discovery; fail closed if enumeration fails."""
-    # Match the actual -File argument, not an incidental mention of this
-    # script in an unrelated PowerShell process' command-line arguments.
-    # A false positive would skip the required monitor before a Codex job.
-    script = ("$ErrorActionPreference='Stop'; "
-              "$target=$env:SORA_NEXT_MONITOR_PATH; "
-              "if([string]::IsNullOrWhiteSpace($target)){throw 'monitor path missing'}; "
-              "$escaped=[regex]::Escape($target); "
-              "$pattern='(?i)(?:^|\\s)-File\\s+(?:\"' + $escaped + '\"|' + "
-              "$escaped + ')(?=\\s|$)'; "
-              "$otherMode='(?i)(?:^|\\s)-(?:Command|EncodedCommand)(?=\\s|$)'; "
-              "$fileSwitch='(?i)(?:^|\\s)-File(?=\\s)'; "
-              "$p=@(Get-CimInstance Win32_Process -Filter "
-              "\"Name='powershell.exe' OR Name='pwsh.exe'\" | "
-              "Where-Object {$_.CommandLine -and $_.CommandLine -match $pattern "
-              "-and $_.CommandLine -notmatch $otherMode "
-              "-and [regex]::Matches($_.CommandLine,$fileSwitch).Count -eq 1}); "
-              "if($p.Count -gt 0){Write-Output 'MONITOR_RUNNING'} "
-              "else{Write-Output 'MONITOR_ABSENT'}")
-    env = dict(os.environ)
-    env["SORA_NEXT_MONITOR_PATH"] = str(_MONITOR)
-    result = subprocess.run(
-        [_system_executable("WindowsPowerShell", "v1.0", "powershell.exe"),
-         "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True, timeout=12, env=env, text=True)
-    if result.returncode != 0 or result.stdout.strip() not in ("MONITOR_RUNNING", "MONITOR_ABSENT"):
-        raise RuntimeError("CLI monitor status unknown")
-    return result.stdout.strip() == "MONITOR_RUNNING"
+    """Query WMI in the calling thread's COM apartment, failing closed."""
+    try:
+        import pythoncom
+
+        pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+        try:
+            return _query_monitor()
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception as exc:
+        raise RuntimeError("CLI monitor status unknown") from exc
 
 
 def ensure_monitor_for_approved_job(request):
@@ -100,13 +128,14 @@ def ensure_monitor_for_approved_job(request):
     if monitor_running():
         return
     # Spawned by Host, NOT by the CLI job. Host itself is not in the job object.
+    executable = monitor_shell()
     subprocess.Popen(
-        [_system_executable("WindowsPowerShell", "v1.0", "powershell.exe"),
+        [executable,
          "-NoProfile", "-STA", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
          "-File", str(_MONITOR)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, close_fds=True,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+        creationflags=subprocess.CREATE_NO_WINDOW, env=_monitor_environment(executable))
     for _ in range(16):
         time.sleep(0.25)
         if monitor_running():

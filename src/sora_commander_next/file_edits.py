@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
 import tempfile
 import unicodedata
 from time import monotonic
@@ -359,37 +358,51 @@ def review_and_create_local(path, roots, content, expected_sha256, *,
                                  _before_create=before_create)
 
 
+def _sid_string(sid):
+    import win32security
+
+    value = win32security.ConvertSidToStringSid(sid)
+    if type(value) is not str or not re.fullmatch(r'S-1-(?:[0-9]+|0x[0-9a-fA-F]+)(?:-[0-9]+)*', value):
+        raise ReadBoundaryError('unsupported or unverifiable Windows ACL')
+    return value
+
+
+def _windows_dacl_entries(descriptor):
+    """Decode ordinary file allow/deny ACEs without looking up account names."""
+    import win32security
+
+    dacl = descriptor.GetSecurityDescriptorDacl()
+    if dacl is None:
+        raise ReadBoundaryError('unsupported or unverifiable Windows ACL')
+    count = dacl.GetAceCount()
+    if type(count) is not int or not 0 <= count <= 0xffff:
+        raise ReadBoundaryError('unsupported or unverifiable Windows ACL')
+    for index in range(count):
+        (kind, flags), mask, sid = dacl.GetAce(index)
+        if (type(kind) is not int or kind not in (win32security.ACCESS_ALLOWED_ACE_TYPE,
+                                                  win32security.ACCESS_DENIED_ACE_TYPE)
+                or type(flags) is not int or flags & ~0x1f
+                or type(mask) is not int or not -(1 << 31) <= mask < (1 << 32)):
+            raise ReadBoundaryError('unsupported or unverifiable Windows ACL')
+        yield kind, bool(flags & win32security.INHERITED_ACE), mask, _sid_string(sid)
+
+
 def _require_inherited_windows_acl(path):
     """Fail closed on explicit file ACL entries; this is not a security sandbox."""
     if os.name != 'nt':
         return
-    script = ('$ErrorActionPreference="Stop"; '
-              '$acl=Get-Acl -LiteralPath $env:SORA_NEXT_ACL_TARGET; '
-              'if (@($acl.Access | Where-Object { -not $_.IsInherited }).Count -gt 0) '
-              '{ exit 3 }')
     try:
-        env = {**os.environ, 'SORA_NEXT_ACL_TARGET': str(path)}
-        # PowerShell 7 adds incompatible module paths to inherited PSModulePath.
-        # Resolve Windows PowerShell 5.1's machine-level path instead of
-        # disabling ACL validation or altering the calling process environment.
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment') as key:
-            machine_modules, _ = winreg.QueryValueEx(key, 'PSModulePath')
-        env['PSModulePath'] = os.path.expandvars(machine_modules)
-        # Resolve Windows PowerShell 5.1 from the installed Windows volume,
-        # not the process PATH (which may prioritize a Store/MSIX alias).
-        system_root = os.environ.get('SystemRoot')
-        if not system_root or not Path(system_root).is_absolute():
-            raise ReadBoundaryError('Windows SystemRoot unavailable')
-        ps51 = Path(system_root) / 'System32' / 'WindowsPowerShell' / 'v1.0' / 'powershell.exe'
-        result = subprocess.run([str(ps51), '-NoProfile', '-NonInteractive',
-                                 '-Command', script], capture_output=True, timeout=15,
-                                env=env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        import win32security
+
+        descriptor = win32security.GetNamedSecurityInfo(
+            str(path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION)
+        for _, inherited, _, _ in _windows_dacl_entries(descriptor):
+            if not inherited:
+                raise ReadBoundaryError('unsupported or unverifiable Windows ACL')
+    except ReadBoundaryError:
+        raise
+    except Exception as exc:
         raise ReadBoundaryError('cannot verify Windows ACL') from exc
-    if result.returncode != 0:
-        raise ReadBoundaryError('unsupported or unverifiable Windows ACL')
 
 
 def replace_text(path, roots, content, expected_sha256, *, _before_commit=None):

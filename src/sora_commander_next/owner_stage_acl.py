@@ -49,10 +49,13 @@ def _check(file_path, allowed):
     seen = set()
     for index in range(3):
         ace = dacl.GetAce(index)
-        (type_id, flags), mask, sid = ace[:3]
+        type_id, flags = ace[0]
+        if type_id != win32security.ACCESS_ALLOWED_ACE_TYPE:
+            raise OwnerStageAclError("untrusted file ACL entry")
+        # Object ACEs can carry GUIDs before the SID. Only decode ordinary Allow.
+        _, mask, sid = ace
         sid_string = win32security.ConvertSidToStringSid(sid)
-        if (type_id != win32security.ACCESS_ALLOWED_ACE_TYPE
-                or flags & win32security.INHERITED_ACE
+        if (flags & win32security.INHERITED_ACE
                 or mask & ntsecuritycon.FILE_ALL_ACCESS
                 != ntsecuritycon.FILE_ALL_ACCESS
                 or sid_string not in allowed

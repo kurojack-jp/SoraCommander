@@ -12,6 +12,13 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+if __package__:
+    from .scn_tunnel_client import INSTALL_HINT, select_tunnel_client
+else:
+    # `python -I` (as tools\setup.cmd runs it) does not add this folder.
+    sys.path.insert(0, str(Path(__file__).absolute().parent))
+    from scn_tunnel_client import INSTALL_HINT, select_tunnel_client
+
 MESSAGES = {
     "en": {
         "runtime": "Windows and Python",
@@ -135,17 +142,24 @@ def check_bridge(environ, root):
         return "HOLD", "bridge", str(error)
 
 
-def tunnel_paths(environ, root):
+def tunnel_paths(environ):
     # Tracked start-sora-commander-broker-dev.cmd / environment launcher paths.
     config = Path(environ["USERPROFILE"]) / ".config/tunnel-client"
-    return (root / "tools/tunnel-client/v0.0.16/tunnel-client.exe",
-            config / "sora-next.yaml", config / "sora-next.key")
+    return config / "sora-next.yaml", config / "sora-next.key"
 
 
 def check_tunnel(environ, root, *, paths=None):
     try:
         missing = []
-        for path in tunnel_paths(environ, root) if paths is None else paths:
+        detail = []
+        if paths is None:
+            executable = select_tunnel_client(root)
+            if executable is None:
+                missing.append(f"TODO: {INSTALL_HINT}")
+            else:
+                detail.append(f"tunnel-client {executable.parent.name}")
+            paths = tunnel_paths(environ)
+        for path in paths:
             try:
                 info = path.lstat()
                 ordinary = (stat.S_ISREG(info.st_mode) and info.st_nlink == 1
@@ -154,7 +168,7 @@ def check_tunnel(environ, root, *, paths=None):
                 ordinary = False
             if not ordinary:
                 missing.append(path.name)
-        return "WARN" if missing else "PASS", "tunnel", ", ".join(missing) or "ok"
+        return "WARN" if missing else "PASS", "tunnel", ", ".join(detail + missing) or "ok"
     except (OSError, KeyError):
         return "WARN", "tunnel", "unavailable"
 

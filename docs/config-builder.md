@@ -91,5 +91,6 @@ folders are refused. Extract the whole ZIP into a dedicated folder before
 launching. When no roots file exists, **that extracted folder** is the checkout
 default shown by Builder; configure explicit allowed folders before using the
 package with another Sora Commander checkout. Retest against that checkout.
-The script does not publish or install anything. Public-repository integration
-and any distribution require the normal review and Owner release decision.
+The script does not publish or install anything. Config Builder and this script
+are part of the public source. The ZIP stays on your PC; distributing the ZIP
+itself requires a separate Owner release decision.

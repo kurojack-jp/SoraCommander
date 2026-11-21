@@ -48,7 +48,8 @@ def _check_folder(folder, *, create=False):
 def _name_error(filename):
     if (not isinstance(filename, str) or not 1 <= len(filename) <= 100
             or filename[0] in " ." or filename[-1] in " ." or ".." in filename
-            or any(ch in '\\/:<>|?*"' or unicodedata.category(ch) in {"Cc", "Cs"} for ch in filename)
+            or any(ch in '\\/:<>|?*"' or unicodedata.category(ch) in {"Cc", "Cs", "Cf", "Zl", "Zp"}
+                   for ch in filename)
             or DEVICES.fullmatch(filename.split(".", 1)[0].rstrip(" "))):
         return "NAME"
     if Path(filename).suffix.lower() not in EXTENSIONS:
@@ -102,7 +103,7 @@ class Inbox:
             pending_id = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:32]
             publish(self.store, operation_type="inbox_drop", state="CREATED",
                     source="inbox", pending_id=pending_id)
-            print(f"[bridge] inbox drop: {utc_now()} {filename} {len(data)} {digest}")
+            print(f"[bridge] inbox drop: {utc_now()} {filename!r} {len(data)} {digest}")
             return {"status": "CREATED", "filename": filename, "bytes": len(data), "sha256": digest}
 
     def _write(self, filename, data):
@@ -117,6 +118,7 @@ class Inbox:
 
         temporary = self.folder / f".inbox-{uuid4().hex}.tmp"
         stream = temporary.open("xb")
+        created = False
         try:
             with stream:
                 stream.write(data)
@@ -124,10 +126,19 @@ class Inbox:
                 os.fsync(stream.fileno())
             try:
                 os.link(temporary, self.folder / filename)
+                created = True
             except FileExistsError:
                 return "EXISTS"
         finally:
-            temporary.unlink()
+            try:
+                temporary.unlink()
+            except OSError:
+                if not created:
+                    raise
+                try:
+                    print(f"[bridge] inbox temp cleanup failed: {temporary.name}")
+                except OSError:
+                    pass
         return None
 
 

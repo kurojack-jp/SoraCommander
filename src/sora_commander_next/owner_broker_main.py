@@ -149,6 +149,12 @@ def _run_with_lease(arguments, guard, repo_root):
     except LaunchLedgerError:
         print("[HOLD] The launch ledger could not be opened. Nothing was started.", flush=True)
         return 5
+    except RuntimeError as error:
+        # Owner storage checks raise fixed text that names no full path.
+        if not str(error).startswith("Owner "):
+            raise
+        print(f"[HOLD] {error}. Nothing was started.", flush=True)
+        return 2
     server = None
     stopped = False
     try:

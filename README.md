@@ -1,5 +1,13 @@
 # Sora Commander
 
+> **Check your ChatGPT plan first**
+>
+> - Custom MCP connections are web-only. OpenAI lists full MCP for Business and Enterprise/Edu. [OpenAI Help Center](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt) (checked 2026-11-20).
+> - The same page's FAQ says Pro can connect custom MCP servers for read/fetch only, so commands and edits would not be available there.
+> - The author uses Sora Commander on **Plus with developer mode**, including approved commands, as of November 2026.
+> - OpenAI's page does not list Plus. This setup can change at any time.
+> - Muse's read-only bridge is an alternative that needs Tailscale and the Python setup. It requires no ChatGPT plan.
+
 **Ask in an ordinary ChatGPT chat, and ChatGPT works on your Windows PC. You approve each step in a window on your screen.**
 
 ![Sora Commander demo: ask in ChatGPT, approve on your PC, see the result](docs/demo.gif)
@@ -21,10 +29,14 @@ after changing it.
 
 It also works in an ordinary chat in Instant mode — no separate app or mode to switch into. From December, ChatGPT and Codex share usage quotas on Plus/Pro/Business plans, but OpenAI says chat in Instant mode does not consume quota, so working here does not draw on your Work quota. That statement covers chat, not tool calls, so it is not a promise that every tool call is free.
 
+![On ChatGPT Plus with the Codex 5-hour limit at 0%, ChatGPT asks Sora Commander to create a file, the Owner approves it on the PC, and the file appears](docs/demo-5h-limit.gif)
+
+*26 seconds, Japanese captions. On ChatGPT Plus with the Codex 5-hour limit at 0%, ChatGPT asks Sora Commander to create a file, you approve it in the window on your PC, and the file appears in Explorer. Recorded on the author's PC on 2026-11-21. It shows that this request still ran, not that tool calls never count toward any limit.*
+
 Sora Commander is an MCP server for Windows. It connects to ChatGPT through OpenAI's Secure MCP Tunnel. Commands that are not plainly safe open an approval window on your PC, and they run only if you approve them. **So you need to be at the PC to approve them.** Reading files and checking results need no window.
 
-> **v0.1 developer preview. Not accepted for production use.**
-> In addition to the author's normal environment, a fresh Windows Sandbox trial on 2026-11-09 (administrator account) reached ChatGPT file reads and an Owner-approved command with exit code 0. Python and Git were borrowed read-only from the host; installing Python was not tested. This limited trial is not production acceptance. This software lets an AI operate your computer. Read each approval window before you click, and use it only if you can judge what a command does.
+> **v0.5 developer preview. Not accepted for production use.**
+> In addition to the author's normal environment, a fresh Windows Sandbox trial on 2026-11-09 (administrator account) reached ChatGPT file reads and an Owner-approved command with exit code 0. Python and Git were borrowed read-only from the host. A second fresh Sandbox trial on 2026-11-21 installed Python 3.13 and Git from their official installers, without PowerShell 7, and `tools\setup.cmd` and the launch checks passed, also from a Japanese checkout path; it did not start a tunnel. These limited trials are not production acceptance. This software lets an AI operate your computer. Read each approval window before you click, and use it only if you can judge what a command does.
 
 日本語の説明は[下](#日本語)にあります。
 
@@ -35,6 +47,9 @@ approval window opens from the bridge. Tested on the author's own setup only;
 whether another account's Muse can join its own tailnet the same way is not yet
 confirmed. Muse is a Meta product; this project is not affiliated with or
 endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
+The bridge code also contains an unfinished exec mode for development. It is
+not supported for use. It does not start unless you list a node under `exec`
+in the peers file, and every command it receives still opens the approval window.
 
 ## What it does
 
@@ -43,7 +58,39 @@ endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
 - Creates and edits supported text files inside allowed folders, after you check the proposed content and approve it in the local window
 - Opens a local approval window for commands and edits. There is no remote approval
 - In Broker mode only, refuses to repeat a command whose outcome is unknown, even after a restart, until you clear it by hand
+- Optionally starts ChatGPT Broker mode when you sign in to Windows. [Setup instructions](docs/INSTALL.md#start-at-logon-optional)
 - Fails closed when the window cannot open, the session is locked, or its records cannot be written
+
+### Registered tools
+
+| Configuration | Registered tools |
+| --- | ---: |
+| ChatGPT, started with the included launchers (Broker mode or usual mode; the edit/create pilot is on) | 54 |
+| ChatGPT Host with the edit/create pilot turned off | 48 |
+| Muse read-only bridge | 36, or 37 with `--inbox` |
+
+Older sections give the tool count at the release they describe.
+
+## New in v0.5.0
+
+Helpers for setup, the key and updates, and no PowerShell in the start path.
+
+- **Updating from v0.4.0:** v0.4.0 has no update helper, so update once by hand as described in [Updating](docs/INSTALL.md#updating). Later updates use `tools\update.cmd`.
+- **`tools\setup.cmd`** creates `.venv`, installs the packages, copies the example tunnel settings when they are missing, runs the doctor and lists what is left. `--check` only reports.
+- **`tools\set-tunnel-key.cmd`** stores the tunnel key with hidden input in a file only your Windows user can open. `--check` checks its form without showing it. `tools\Set-NextTunnelKey.ps1` still works and calls it.
+- **`tools\update.cmd`** previews (`--check`) and fast-forwards a clean `main`.
+- **Start at logon (optional).** `tools\install-broker-autostart.cmd` starts Broker mode and then the tunnel when you sign in. [Setup](docs/INSTALL.md#start-at-logon-optional)
+- **tunnel-client version.** Put it in `tools\tunnel-client\<version>\`; the launchers use the highest valid version.
+- **No PowerShell needed.** The launchers and helpers use only `.cmd` files and Python, so they keep working when Windows PowerShell 5.1 becomes optional. PowerShell 7 is not required either.
+- **Shorter tool help.** Shared approval rules moved into the server instructions. Tool names and inputs are unchanged. The read-only Muse bridge now lists 36 tools (37 with `--inbox`); the six command and wait tools it could never run are gone.
+- **Fixes.**
+  - Git tools show Japanese and other non-ASCII file names as they are, not as `\343\203...` escapes.
+  - `setup.cmd` can start the doctor check.
+  - The Muse bridge stops with one `[HOLD]` line for an invalid `allowed-roots.txt` line, a missing checkout or the example ID left in the peers file.
+  - Inbox file names refuse invisible and direction-changing characters.
+  - `bridge_digest` reports the version instead of `UNKNOWN`.
+  - The autostart install and uninstall commands say when `.venv` is missing.
+- **After updating, restart the Broker, its client and the bridge, then refresh the tools in ChatGPT and on the Muse side.**
 
 ## New in v0.4.0
 
@@ -130,8 +177,10 @@ the visible count depends on the Host configuration.
 ## Before you start
 
 - Windows 11, signed in to your own account
-- Python 3.13
-- An OpenAI account that can create a Secure MCP Tunnel and a custom MCP connection
+- Python 3.13 with the `py` launcher (3.14 is not tested yet)
+- Git for Windows in its default folder, `C:\Program Files\Git`
+- For ChatGPT: OpenAI's `tunnel-client` and an OpenAI account that can create a Secure MCP Tunnel and a custom MCP connection
+- No PowerShell install is needed
 
 **Availability depends on your account and workspace permissions.** Follow the
 current OpenAI help, [Connecting custom MCP servers in ChatGPT](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt),
@@ -163,8 +212,10 @@ to recover from them — a paid companion guide is available:
 - `remote_ready=false` and `LOCAL_DEMO_ONLY` are what this version reports. They mean it is not accepted for production.
 - The code is not signed and no installer is provided.
 - It runs with your own Windows rights. Another program under your account can read the key file, and can edit the launch records.
-- There is no automatic reconnect. If the PC restarts, you start it again by hand.
-- Not tested: another physical PC, a separate Windows-user setup, installing Python from scratch, paths with non-ASCII characters (including Japanese), a power loss during a job, or plans other than the author's.
+- There is no automatic reconnect. After a restart, start Broker mode again by hand, or install the optional logon task, which starts it once at your next sign-in. A failed start or an exited process is not retried.
+- Tested with synthetic Windows tests only: Japanese and accented names in `allowed-roots.txt` (UTF-8, with or without a BOM), the file read tools, local Git history and the doctor check.
+- Tested in a fresh Windows Sandbox only: installing Python 3.13 and Git from scratch, `tools\setup.cmd`, and the launch checks from an ASCII and a Japanese checkout path.
+- Not tested: a live start from a checkout path with non-ASCII characters (including Japanese), real links with such names, another physical PC, a separate Windows-user setup, a power loss during a job, or plans other than the author's.
 
 Report security problems as described in [SECURITY.md](SECURITY.md).
 
@@ -181,6 +232,15 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 ---
 
 ## 日本語
+
+> **まず ChatGPT のプランを確認**
+>
+> - カスタム MCP 接続は Web 版のみです。OpenAI はフル MCP の対象として Business と Enterprise/Edu を案内しています。[OpenAI ヘルプ](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)（2026-11-20 確認）。
+> - 同じページの FAQ では、Pro はカスタム MCP を読み取り・取得の権限でのみ接続できます。コマンドや編集は使えない見込みです。
+> - 作者は 2026 年 11 月時点で、**Plus の開発者モード**で Sora Commander を使い、承認付きコマンドも実行しています。
+> - このヘルプページに Plus の記載はありません。この環境で使えるかどうかはいつでも変わり得ます。
+> - 読み取り専用の Muse ブリッジも使えます。Tailscale と Python のセットアップが必要で、ChatGPT のプランは不要です。
+> - ブリッジのコードには、開発中の exec モードも入っています。使うことはサポートしていません。peers ファイルの`exec`にノードを書かない限り起動せず、受け取ったコマンドはすべて承認窓を出します。
 
 **いつもの ChatGPT のチャットで頼むだけで、ChatGPT があなたの Windows PC で作業します。1 つずつ、画面の窓で承認します。**
 
@@ -200,16 +260,24 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 
 いつものチャット（Instant モードを含む）でそのまま使えます。12月から Plus/Pro/Business では ChatGPT と Codex で利用枠が共有されますが、OpenAI によれば Instant モードのチャットは枠を消費しないため、こちらの作業で Work の枠を使わずに済みます。ただしこの説明はチャットについてのもので、ツール呼び出しの扱いまでは書かれていないので、無料を断定するものではありません。
 
+![ChatGPT Plus で Codex の5時間枠が0%のまま、ChatGPT から Sora Commander にファイル作成を頼み、PC で承認するとファイルができる様子](docs/demo-5h-limit.gif)
+
+*26秒、日本語字幕。ChatGPT Plus で Codex の5時間枠が0%の状態で、ChatGPT から Sora Commander にファイル作成を頼み、PC の窓で承認すると、エクスプローラーにファイルができます。2026-11-21 に作者の PC で録画しました。この依頼が動いたことを示すもので、ツール呼び出しがどの枠も使わないことまでは示していません。*
+
 OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サーバーです。安全と言い切れないコマンドは PC の画面に承認窓を出して、承認したときだけ実行します。**承認するときは PC の前にいる必要があります。** ファイルを読むことや結果の確認には、窓は出ません。
 
 許可フォルダの中の対応するテキストファイルを、承認窓で提案された内容を確認して承認した後に、ChatGPT が作成・編集できます。
 
-> **v0.1 開発者向けプレビューです。実用としての受入はしていません。**
-> 作者の通常環境に加え、2026-11-09に新しいWindowsサンドボックス（管理者権限のユーザー）で、ChatGPTからのファイル読取りとOwner承認付きコマンドの終了コード0まで試しました。PythonとGitはホストから読み取り専用で借りており、Pythonの導入は試していません。限定的な試行で、実用・本番の受入ではありません。AIにPCを操作させるソフトです。承認窓の内容を読んでから押してください。コマンドの意味を判断できる方だけ使ってください。
+> **v0.5 開発者向けプレビューです。実用としての受入はしていません。**
+> 作者の通常環境に加え、2026-11-09に新しいWindowsサンドボックス（管理者権限のユーザー）で、ChatGPTからのファイル読取りとOwner承認付きコマンドの終了コード0まで試しました。PythonとGitはホストから読み取り専用で借りていました。2026-11-21には、PowerShell 7 のない新しいサンドボックスで Python 3.13 と Git を公式のインストーラーから入れ、`tools\setup.cmd`とランチャーの起動前の確認が、日本語を含むcheckoutのパスでも通りました。トンネルは起動していません。限定的な試行で、実用・本番の受入ではありません。AIにPCを操作させるソフトです。承認窓の内容を読んでから押してください。コマンドの意味を判断できる方だけ使ってください。
 
-未試験：別の実PC、別のWindowsユーザーでの導入、Pythonの導入からの準備、日本語などASCII以外の文字を含むパス、ジョブ中の電源断、作者と異なるChatGPTプラン。
+合成テストだけで確認したもの：`allowed-roots.txt`（UTF-8、BOMの有無どちらも）の日本語・アクセント付きの名前、ファイル読み取りツール、ローカルのGit履歴、doctorの診断。
 
-**必要なもの：** Windows 11、Python 3.13、Secure MCP Tunnel とカスタム MCP 接続を作れる OpenAI のアカウント。
+新しいWindowsサンドボックスだけで確認したもの：Python 3.13 と Git の導入からの準備、`tools\setup.cmd`、ASCIIと日本語のcheckoutのパスでのランチャーの起動前の確認。
+
+未試験：日本語などASCII以外の文字を含むcheckoutのパスでの実際の起動、そうした名前の実際のリンク、別の実PC、別のWindowsユーザーでの導入、ジョブ中の電源断、作者と異なるChatGPTプラン。
+
+**必要なもの：** Windows 11、Python 3.13（`py`ランチャー付き。3.14 はまだ試していません）、既定のフォルダ`C:\Program Files\Git`に入れた Git for Windows。ChatGPT で使うときは、OpenAI の`tunnel-client`と、Secure MCP Tunnel とカスタム MCP 接続を作れる OpenAI のアカウント。PowerShell のインストールは要りません。
 
 **利用可否はアカウントとワークスペースの権限に依存します。**
 接続はOpenAI公式ヘルプの最新の[「ChatGPT でのカスタム MCP サーバーへの接続」](https://help.openai.com/ja-jp/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)に従ってください。
@@ -218,6 +286,40 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 Brokerのパイプが用意できるまで待ってからトンネルを起動します。
 結果が分からないコマンドを再起動後も繰り返さない機能はBrokerモードだけです。
 補足の通常モードには、この二重実行の防止がありません。
+再起動したあとは Broker モードを手で起動し直します。任意のログオン時のタスクを登録すれば、次のサインイン時に1回起動します。起動に失敗したり終了したりしても、やり直しはしません。
+任意で、Windows サインイン時に ChatGPT 用 Broker モードを起動できます。
+[設定手順](docs/INSTALL.ja.md#サインイン時に起動する任意)
+
+### 登録ツール数
+
+| 構成 | 登録ツール数 |
+| --- | ---: |
+| ChatGPT（同梱のランチャーで起動。Broker モードでも通常モードでも、編集・作成 pilot はオン） | 54 |
+| 編集・作成 pilot をオフにした ChatGPT 用 Host | 48 |
+| 読み取り専用 Muse ブリッジ | 36（`--inbox` 付きは 37） |
+
+過去の変更点にあるツール数は、各リリース時点の数です。
+
+## v0.5.0 の変更
+
+セットアップ・キー・更新のヘルパーが入り、起動に PowerShell を使わなくなりました。
+
+- **v0.4.0 から更新するとき：** v0.4.0 には更新ヘルパーがないので、[導入手順の「更新する」](docs/INSTALL.ja.md#更新する)のとおり1回だけ手で更新してください。次からは `tools\update.cmd` を使えます。
+- **`tools\setup.cmd`：** `.venv`を作り、パッケージを入れ、トンネル設定の見本がなければコピーし、doctor で診断して、残りの手作業を一覧にします。`--check`は確認だけです。
+- **`tools\set-tunnel-key.cmd`：** トンネルのキーを画面に出さずに入力し、自分の Windows ユーザーだけが開けるファイルに保存します。`--check`は中身を見せずに形だけを確かめます。`tools\Set-NextTunnelKey.ps1`も引き続き使え、中でこれを呼びます。
+- **`tools\update.cmd`：** 変更のない`main`を確認（`--check`）し、早送りで更新します。
+- **サインイン時の起動（任意）：** `tools\install-broker-autostart.cmd`で、サインイン時に Broker モードとトンネルを起動します。[設定手順](docs/INSTALL.ja.md#サインイン時に起動する任意)
+- **tunnel-client の版：** `tools\tunnel-client\<version>\`に置くと、ランチャーが有効な中で一番新しい版を使います。
+- **PowerShell が要らなくなりました：** ランチャーとヘルパーは`.cmd`と Python だけで動くので、Windows PowerShell 5.1 が任意の機能になっても動きます。PowerShell 7 も要りません。
+- **ツールの説明を短くしました：** 承認結果の共通ルールはサーバーの説明にまとめました。ツールの名前と入力は変わりません。読み取り専用の Muse ブリッジは、使えなかったコマンドと待機のツール6個を外し、36個（`--inbox`付きは37個）になりました。
+- **直したこと：**
+  - Git のツールで、日本語などのファイル名が`\343\203...`のような記号にならず、そのまま出ます。
+  - `setup.cmd`から doctor の診断を始められるようにしました。
+  - Muse ブリッジは、`allowed-roots.txt`の不正な行、見つからない checkout、peers ファイルに残った例の ID を、`[HOLD]`の1行で知らせて止まります。
+  - 受け取り箱のファイル名で、見えない文字や表示の向きを変える文字を拒否します。
+  - `bridge_digest`が`UNKNOWN`ではなく版を返します。
+  - 自動起動の登録・解除のコマンドは、`.venv`がないとそう知らせます。
+- **更新後は Broker・クライアント・ブリッジを再起動し、ChatGPT と Muse 側でツールを再読み込みしてください。**
 
 ## v0.4.0 の変更
 

@@ -160,7 +160,8 @@ class MainTests(unittest.TestCase):
         self.assertEqual(result["status"], "DENY")
         self.assertIn("Sora Commander read-only bridge for Muse", self.output.getvalue())
         self.assertNotIn("mode: EXEC", self.output.getvalue())
-        self.built.assert_called_once_with(host, dev_writes_enabled=False, dev_tools_enabled=False)
+        self.built.assert_called_once_with(host, dev_writes_enabled=False, dev_tools_enabled=False,
+                                          command_tools_enabled=False)
         self.server.tool.assert_called_once_with()
         self.assertEqual(self.run.call_args.kwargs["ws"], "none")
         self.security.assert_called_once_with(enable_dns_rebinding_protection=True,
@@ -188,6 +189,25 @@ class MainTests(unittest.TestCase):
                          ["[HOLD] allowed-roots.txt could not be checked. Bridge not started."] * 2)
         startup.assert_not_called()
         self.built.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_invalid_allowed_roots_line_is_one_hold_line(self):
+        from sora_commander_next.allowed_roots import AllowedRootsError
+        failure = AllowedRootsError(3, "protected system or user folder")
+        with patch.object(bridge, "load_token", return_value=READ_TOKEN),                 patch("sora_commander_next.allowed_roots.startup_allowed_roots", side_effect=failure):
+            self.assertEqual(bridge.main(self.argv + ["--auth", "token"]), 2)
+        self.assertEqual(self.errors.getvalue().splitlines(),
+                         ["[HOLD] allowed-roots.txt: allowed-roots line 3: protected system or user folder. "
+                          "Bridge not started."])
+        self.built.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_missing_checkout_is_one_hold_line(self):
+        argv = ["--checkout", str(ROOT / "synthetic-missing-checkout"), "--bind", "100.64.0.1",
+                "--auth", "token"]
+        self.assertEqual(bridge.main(argv), 2)
+        self.assertEqual(self.errors.getvalue().splitlines(),
+                         ["[HOLD] The --checkout folder was not found. Bridge not started."])
         self.run.assert_not_called()
 
     def test_exec_construction_failure_never_listens_or_falls_back(self):
@@ -222,6 +242,30 @@ class MainTests(unittest.TestCase):
         self.run.assert_not_called()
 
 
+class ReadonlyCommandWireTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hidden_command_is_refused_without_calling_host(self):
+        from mcp.server.fastmcp.exceptions import ToolError
+        from sora_commander_next.mcp_adapter import build_server
+
+        host = Host(policy=Policy(roots=()))
+        self.addCleanup(host.close)
+        server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False,
+                              command_tools_enabled=False)
+        with patch.object(host, "run_command_wait") as run:
+            with self.assertRaises(ToolError):
+                await server.call_tool("run_command_wait", {
+                    "executable": sys.executable, "argv": [], "cwd": str(ROOT),
+                    "wait_seconds": 0,
+                })
+        run.assert_not_called()
+
+    def test_command_selection_requires_an_explicit_boolean(self):
+        from sora_commander_next.mcp_adapter import build_server
+
+        with self.assertRaisesRegex(ValueError, "explicit boolean command tool"):
+            build_server(object(), command_tools_enabled=0)
+
+
 @unittest.skipUnless(os.name == "nt", "Owner composition uses Windows modules")
 class CompositionTests(unittest.TestCase):
     def test_readonly_catalog_excludes_dev_tools_and_interactive_install(self):
@@ -231,13 +275,17 @@ class CompositionTests(unittest.TestCase):
         host = Host(policy=Policy(roots=(), read_only_roots=(str(ROOT),)))
         self.addCleanup(host.close)
         with patch("sora_commander_next.dev_rdc_compat.install_host_interactive") as install:
-            server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+            server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False,
+                                  command_tools_enabled=False)
             register_digest(server, host, checkout=ROOT, auth="tailscale", inbox=False)
         names = {tool.name for tool in server._tool_manager.list_tools()}
         self.assertTrue({"status", "read_text_file", "path_info", "list_folder", "bridge_digest"} <= names)
         self.assertTrue(names.isdisjoint({"send_input", "create_directory", "create_file", "move_file",
                                           "request_source_patch_dev", "list_processes", "get_config"}))
-        self.assertEqual(len(names), 42)
+        self.assertTrue({"list_tasks", "activity", "request_status"} <= names)
+        self.assertTrue(names.isdisjoint({"run_command", "run_command_wait", "run_task", "ogf_cue",
+                                          "await_command_result", "review_status"}))
+        self.assertEqual(len(names), 36)
         install.assert_not_called()
 
     def test_shared_composition_keeps_scopes_and_mandatory_dispatcher(self):

@@ -31,9 +31,11 @@ class PublicLaunchPathTests(unittest.TestCase):
                         if component != name:
                             (tools / component).write_bytes(
                                 b'@echo off\r\n>"%~dp0called" echo called\r\nexit /b 9\r\n')
-                    (tools / "Set-NextTunnelKey.ps1").write_text(
-                        "Set-Content -LiteralPath (Join-Path $PSScriptRoot 'called') 'called'; exit 9",
-                        encoding="utf-8")
+                    for helper in ("scn_tunnel_key.py", "scn_launch_check.py"):
+                        (tools / helper).write_text(
+                            "from pathlib import Path\n"
+                            "Path(__file__).with_name('called').touch()\nraise SystemExit(9)\n",
+                            encoding="ascii")
                     env = {key: value for key, value in os.environ.items()
                            if not key.startswith("SORA_NEXT_") and key != "CONTROL_PLANE_API_KEY"}
                     env.update(USERPROFILE=str(home / "profile"),

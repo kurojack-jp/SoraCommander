@@ -10,11 +10,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from tests._inherited_test_temp import inherited_test_temp
+from tools import scn_doctor as doctor
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("scn_doctor", ROOT / "tools/scn_doctor.py")
-doctor = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(doctor)
 
 
 class DoctorTests(unittest.TestCase):
@@ -111,14 +109,17 @@ class DoctorTests(unittest.TestCase):
                          ("HOLD", "bridge", "invalid or unreadable configuration"))
 
     def test_tunnel_pass_missing_directory_link_and_never_read(self):
-        paths = doctor.tunnel_paths(self.env, self.repo)
-        self.assertEqual(self.call(doctor.check_tunnel)[0], "WARN")
+        executable = self.repo / "tools/tunnel-client/v0.1.0/tunnel-client.exe"
+        paths = (executable, *doctor.tunnel_paths(self.env))
+        level, _, detail = self.call(doctor.check_tunnel)
+        self.assertEqual(level, "WARN")
+        self.assertIn("TODO: Put tunnel-client.exe at", detail)
         for path in paths:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"synthetic - must never be read")
         with patch.object(Path, "open", side_effect=AssertionError("no content reads")), \
                 patch.object(builtins, "open", side_effect=AssertionError("no content reads")):
-            self.assertEqual(self.call(doctor.check_tunnel), ("PASS", "tunnel", "ok"))
+            self.assertEqual(self.call(doctor.check_tunnel), ("PASS", "tunnel", "tunnel-client v0.1.0"))
             self.assertEqual(self.call(doctor.check_tunnel, paths=(paths[0].parent,))[0], "WARN")
         real = Path.lstat
         def linked(path, *args, **kwargs):
@@ -171,7 +172,8 @@ class DoctorTests(unittest.TestCase):
 
     def test_main_read_only_nine_lines_and_warn_exit_zero(self):
         self.write("allowed-roots.txt", str(self.repo))
-        paths = doctor.tunnel_paths(self.env, self.repo)
+        executable = self.repo / "tools/tunnel-client/v0.1.0/tunnel-client.exe"
+        paths = (executable, *doctor.tunnel_paths(self.env))
         for path in paths:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"synthetic")
@@ -226,3 +228,15 @@ class DoctorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IsolatedEntryPointTests(unittest.TestCase):
+    def test_isolated_python_can_start_the_doctor(self):
+        # tools\setup.cmd runs the doctor as `python -I -B tools\scn_doctor.py`.
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(ROOT / "tools/scn_doctor.py"), "--help"],
+            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--lang", result.stdout)

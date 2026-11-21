@@ -11,7 +11,6 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
 from threading import Lock
 from time import monotonic
 
@@ -57,55 +56,67 @@ def _chain(p):
     return tuple(records)
 
 
+def _scoped_acl_record(path, trusted, *, target):
+    import ntsecuritycon
+    import win32con
+    import win32file
+    import win32security
+
+    sections = win32security.OWNER_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION
+    handle = win32file.CreateFile(
+        str(path), win32con.READ_CONTROL | ntsecuritycon.FILE_READ_ATTRIBUTES,
+        win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE,
+        None, win32con.OPEN_EXISTING,
+        win32file.FILE_FLAG_OPEN_REPARSE_POINT | win32con.FILE_FLAG_BACKUP_SEMANTICS, None)
+    try:
+        if win32file.GetFileInformationByHandle(handle)[0] & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ReadBoundaryError('abnormal or unverifiable ACL')
+        descriptor = win32security.GetSecurityInfo(handle, win32security.SE_FILE_OBJECT, sections)
+    finally:
+        handle.Close()
+    if file_edits._sid_string(descriptor.GetSecurityDescriptorOwner()) not in trusted:
+        raise ReadBoundaryError('abnormal or unverifiable ACL')
+
+    previous_rank = -1
+    for kind, inherited, mask, trustee in file_edits._windows_dacl_entries(descriptor):
+        allow = kind == win32security.ACCESS_ALLOWED_ACE_TYPE
+        # Explicit deny, explicit allow, inherited deny, inherited allow.
+        rank = 2 * inherited + allow
+        if (rank < previous_rank or not allow or mask & ~0x1F01FF
+                or (target and not inherited) or (trustee not in trusted and mask & 0xD0156)):
+            raise ReadBoundaryError('abnormal or unverifiable ACL')
+        previous_rank = rank
+    if previous_rank == -1:
+        raise ReadBoundaryError('abnormal or unverifiable ACL')
+    record = win32security.ConvertSecurityDescriptorToStringSecurityDescriptor(
+        descriptor, win32security.SDDL_REVISION_1, sections)
+    if type(record) is not str or not record:
+        raise ReadBoundaryError('abnormal or unverifiable ACL')
+    return record
+
+
 def _acl_snapshot(p, sid):
-    """Read-only strict ACL gate; no registry reads, ACL writes or shell input."""
+    """Verify the target and every parent and retain their owner and DACL."""
     if os.name != 'nt':
         raise ReadBoundaryError('Windows ACL verification required')
-    # Reject untrusted write/delete/owner/DACL rights even when inherited.
-    # Restrict target to inherited ACLs, matching the existing CAS capability.
-    script = r'''
-$ErrorActionPreference='Stop'
-$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-if($sid -ne $env:SORA_SCOPED_SID){exit 2}
-$trusted=@($sid,'S-1-5-18','S-1-5-32-544')
-$paths=ConvertFrom-Json $env:SORA_SCOPED_ACL_PATHS
-$records=@()
-foreach($p in $paths){
- $a=Get-Acl -LiteralPath $p
- $owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
- if($owner -notin $trusted -or -not $a.AreAccessRulesCanonical){exit 3}
- $rules=@($a.Access)
- if($rules.Count -eq 0){exit 4}
- foreach($r in $rules){
-  $s=$r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-  if($r.AccessControlType -ne 'Allow'){exit 5}
-  $rights=[int64]$r.FileSystemRights
-  if($rights -lt 0 -or ($rights -band (-bnot 0x1F01FF)) -ne 0){exit 8}
-  if(($p -eq $paths[0]) -and (-not $r.IsInherited)){exit 6}
-  if(($s -notin $trusted) -and (([int64]$r.FileSystemRights -band 0xD0156) -ne 0)){exit 7}
- }
- $sections=[System.Security.AccessControl.AccessControlSections]'Owner,Access'
- $records+= $a.GetSecurityDescriptorSddlForm($sections)
-}
-ConvertTo-Json -Compress -InputObject $records
-'''
-    paths = [str(p), *(str(parent) for parent in p.parents)]
-    env = {**os.environ, 'SORA_SCOPED_SID': sid,
-           'SORA_SCOPED_ACL_PATHS': json.dumps(paths)}
-    # Fixed Windows module search; do not inherit a PowerShell 7 module path.
-    system = Path(os.environ['SystemRoot']) / 'System32' / 'WindowsPowerShell' / 'v1.0'
-    env['PSModulePath'] = str(system / 'Modules')
     try:
-        result = subprocess.run([str(system / 'powershell.exe'), '-NoProfile',
-                                 '-NonInteractive', '-Command', script],
-                                capture_output=True, text=True, timeout=15, env=env)
-        records = json.loads(result.stdout) if result.returncode == 0 else None
-        if (type(records) is not list or len(records) != len(paths)
-                or any(type(v) is not str or not v for v in records)):
+        import win32api
+        import win32con
+        import win32security
+
+        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            current = file_edits._sid_string(
+                win32security.GetTokenInformation(token, win32security.TokenUser)[0])
+        finally:
+            token.Close()
+        if type(sid) is not str or current != sid:
             raise ReadBoundaryError('abnormal or unverifiable ACL')
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        trusted = {current, 'S-1-5-18', 'S-1-5-32-544'}
+        return tuple(_scoped_acl_record(part, trusted, target=(index == 0))
+                     for index, part in enumerate((p, *p.parents)))
+    except Exception as exc:
         raise ReadBoundaryError('abnormal or unverifiable ACL') from exc
-    return tuple(records)
 
 
 @dataclass(frozen=True)

@@ -17,11 +17,34 @@ def owner_pilot_root(repo_root, profile):
     raise ValueError("unsupported local Owner profile")
 
 
+def _verify_owner_journal_acls(storage):
+    from .owner_stage_acl import OwnerStageAclError, _check, _sids
+
+    # Name the object and the fixed reason, never the full path.
+    label = "the Owner storage folder"
+    try:
+        import win32security
+        allowed = {win32security.ConvertSidToStringSid(sid) for sid in _sids()}
+        _check(storage, allowed)
+        for name in ("owner-session-journal.json", "owner-output-archive.json",
+                     "owner-session-journal.json.lock"):
+            target = storage / name
+            label = name
+            try:
+                target.lstat()
+            except FileNotFoundError:
+                continue
+            _check(target, allowed)
+    except OwnerStageAclError as exc:
+        raise RuntimeError(f"Owner ACL invalid: {label}: {exc}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Owner ACL unavailable: {label}") from exc
+
+
 def owner_journal_path(repo_root=None, *, storage_override=None):
     """Fixed Owner storage; override is test-only and never from an MCP request."""
     import os
     import stat
-    import subprocess
     from pathlib import Path
     storage = (Path(storage_override) if storage_override is not None else
                Path(os.environ["LOCALAPPDATA"]) / "SoraCommanderNext")
@@ -29,72 +52,7 @@ def owner_journal_path(repo_root=None, *, storage_override=None):
             or storage.is_symlink() or storage.is_junction()):
         raise RuntimeError("Owner journal directory invalid")
     if os.name == "nt":
-        # Reject inherited or extra ACEs; require exact Owner/SYSTEM/Admins.
-        script = r"""
-$ErrorActionPreference='Stop'
-$acl=Get-Acl -LiteralPath $env:SORA_NEXT_VERIFY_STORAGE
-$owner=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$allowed=@($owner,'S-1-5-18','S-1-5-32-544')
-if(-not $acl.AreAccessRulesProtected){exit 2}
-$rules=@($acl.Access)
-if($rules.Count -ne 3){exit 3}
-$seen=@()
-foreach($r in $rules){
- $sid=$r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
- if($sid -notin $allowed -or $r.AccessControlType -ne 'Allow' -or
-    -not $r.FileSystemRights.HasFlag([System.Security.AccessControl.FileSystemRights]::FullControl) -or
-    $r.IsInherited){exit 4}
- $seen+= $sid
-}
-if(@($seen|Select-Object -Unique).Count -ne 3){exit 5}
-$targets=@('owner-session-journal.json','owner-output-archive.json','owner-session-journal.json.lock')
-foreach($filename in $targets){
- $target=Join-Path $env:SORA_NEXT_VERIFY_STORAGE $filename
- if(Test-Path -LiteralPath $target){
- $fileAcl=Get-Acl -LiteralPath $target
- # Raw stdout/stderr can contain secrets. File ACLs, like the parent
- # directory, must have inheritance disabled and exact explicit grants.
- if(-not $fileAcl.AreAccessRulesProtected){exit 9}
- $fileRules=@($fileAcl.Access)
- if($fileRules.Count -ne 3){exit 6}
- $fileSeen=@()
- foreach($r in $fileRules){
-  $sid=$r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-  if($sid -notin $allowed -or $r.AccessControlType -ne 'Allow' -or
-     -not $r.FileSystemRights.HasFlag([System.Security.AccessControl.FileSystemRights]::FullControl) -or
-     $r.IsInherited){
-   exit 7
-  }
-  $fileSeen+=$sid
- }
- if(@($fileSeen|Select-Object -Unique).Count -ne 3){exit 8}
- }
-}
-Write-Output 'OWNER_ACL_OK'
-"""
-        env = {**os.environ, "SORA_NEXT_VERIFY_STORAGE": str(storage)}
-        # A pwsh 7 parent may provide a module path that prevents Windows
-        # PowerShell 5.1 from loading Get-Acl. Preserve the full ACL test.
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment") as key:
-                machine_modules, _ = winreg.QueryValueEx(key, "PSModulePath")
-            if type(machine_modules) is not str or not machine_modules.strip():
-                raise ValueError("Windows module path unavailable")
-            env["PSModulePath"] = os.path.expandvars(machine_modules)
-        except (OSError, ValueError) as exc:
-            raise RuntimeError("Owner ACL unavailable") from exc
-        try:
-            from .cli_monitor_bootstrap import _system_executable
-            powershell = _system_executable("WindowsPowerShell", "v1.0", "powershell.exe")
-            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive",
-                                     "-Command", script], capture_output=True,
-                                    timeout=10, env=env, text=True)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError("Owner ACL unavailable") from exc
-        if result.returncode != 0 or result.stdout.strip() != "OWNER_ACL_OK":
-            raise RuntimeError("Owner ACL invalid")
+        _verify_owner_journal_acls(storage)
     target = storage / "owner-session-journal.json"
     if target.is_symlink() or target.is_junction():
         raise RuntimeError("Owner journal target invalid")

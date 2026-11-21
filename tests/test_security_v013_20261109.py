@@ -216,18 +216,17 @@ class BatchAndCautionTests(unittest.TestCase):
 
 
 class PowerShellPathTests(unittest.TestCase):
-    def test_absolute_system_powershell_and_missing_systemroot(self):
-        import winreg
-        with inherited_test_temp() as folder, patch.object(winreg, "OpenKey"), patch.object(
-                winreg, "QueryValueEx", return_value=("synthetic-modules", 1)), patch(
-                "subprocess.run", return_value=SimpleNamespace(returncode=0, stdout="OWNER_ACL_OK")) as runner:
-            with patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}):
+    def test_journal_acl_uses_no_shell_even_without_systemroot(self):
+        import inspect
+        from sora_commander_next import stdio_main
+
+        self.assertNotIn("powershell.exe", inspect.getsource(stdio_main).lower())
+        with inherited_test_temp() as folder, patch.dict(os.environ), patch(
+                "win32security.OpenProcessToken", side_effect=OSError("synthetic unavailable")
+                ) as token, patch("subprocess.Popen") as launch:
+            os.environ.pop("SystemRoot", None)
+            os.environ["PSModulePath"] = "synthetic-invalid"
+            with self.assertRaisesRegex(RuntimeError, "^Owner ACL unavailable: "):
                 owner_journal_path(storage_override=folder)
-                self.assertEqual(runner.call_args.args[0][0],
-                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
-            runner.reset_mock()
-            with patch.dict(os.environ):
-                os.environ.pop("SystemRoot", None)
-                with self.assertRaisesRegex(RuntimeError, "SystemRoot unavailable"):
-                    owner_journal_path(storage_override=folder)
-                runner.assert_not_called()
+            token.assert_called_once()
+            launch.assert_not_called()

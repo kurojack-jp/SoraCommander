@@ -13,46 +13,57 @@ rem --check: runs both launchers' preflight only, nothing is started.
 set "BROKER=%~dp0start-owner-broker-dev.cmd"
 set "TUNNEL=%~dp0start-sora-commander-broker-dev.cmd"
 set "CONTROL_PLANE_API_KEY="
-for %%F in ("%BROKER%" "%TUNNEL%") do (
+set "PYTHON=%BASE%\.venv\Scripts\python.exe"
+set "CHECK=%BASE%\tools\scn_launch_check.py"
+for %%F in ("%PYTHON%" "%CHECK%" "%BROKER%" "%TUNNEL%") do (
     if not exist "%%~F" (
         echo [HOLD] Required local component is missing: %%~F
         set "RC=2"
         goto :finish
     )
 )
-if /I "%~1"=="--check" (
-    call "%BROKER%" --check
-    if errorlevel 1 (
-        set "RC=%ERRORLEVEL%"
-        goto :finish
-    )
-    call "%TUNNEL%" --check
-    set "RC=%ERRORLEVEL%"
-    goto :finish
-)
+if /I "%~1"=="--check" goto :check_only
 rem The Broker must start before the tunnel, and only once.
-powershell.exe -NoProfile -NonInteractive -Command "if(Get-Process -Name 'tunnel-client' -ErrorAction SilentlyContinue){exit 3}; if([IO.Directory]::GetFiles('\\.\pipe\') -like '*\SoraCommanderNext-Broker-*'){exit 5}; exit 0"
-if errorlevel 5 (
+"%PYTHON%" -I -B "%CHECK%" --tunnel-absent --broker-absent
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="7" goto :query_failed
+if "%RC%"=="6" goto :finish
+if "%RC%"=="5" (
     echo [HOLD] A Broker is already running. Start only the tunnel with start-sora-commander-broker-dev.cmd.
-    set "RC=5"
     goto :finish
 )
-if errorlevel 3 (
+if "%RC%"=="3" (
     echo [HOLD] A tunnel is running. Stop it first. Nothing was started.
-    set "RC=3"
     goto :finish
 )
+if not "%RC%"=="0" goto :unexpected
 echo [INFO] Starting the Owner Broker in its own window.
 start "Sora Owner Broker" cmd.exe /d /c ""%BROKER%""
-powershell.exe -NoProfile -NonInteractive -Command "$end=(Get-Date).AddSeconds(30); while((Get-Date) -lt $end){ if([IO.Directory]::GetFiles('\\.\pipe\') -like '*\SoraCommanderNext-Broker-*'){exit 0}; Start-Sleep -Milliseconds 500 }; exit 4"
-if errorlevel 4 (
+"%PYTHON%" -I -B "%CHECK%" --wait-broker 30
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="7" goto :query_failed
+if "%RC%"=="6" goto :finish
+if "%RC%"=="4" (
     echo [HOLD] The Broker pipe was not ready within 30 seconds. Its window shows why. The tunnel was not started.
-    set "RC=4"
     goto :finish
 )
+if not "%RC%"=="0" goto :unexpected
 echo [INFO] The Broker pipe is present. Starting the tunnel here.
 call "%TUNNEL%"
 exit /b %ERRORLEVEL%
+
+:check_only
+call "%BROKER%" --check
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" goto :finish
+call "%TUNNEL%" --check
+set "RC=%ERRORLEVEL%"
+goto :finish
+
+:unexpected
+echo [HOLD] Launch check returned unexpected exit code %RC%.
+:query_failed
+set "RC=2"
 
 :finish
 if /I not "%~1"=="--check" pause

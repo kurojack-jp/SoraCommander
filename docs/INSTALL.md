@@ -2,10 +2,15 @@
 
 In addition to the author's normal environment, a fresh Windows Sandbox trial on
 2026-11-09 (administrator account) reached setup, ChatGPT file reads and an
-Owner-approved command with exit code 0. Python and Git were borrowed read-only
-from the host, so installing Python from scratch was not tested. Another physical
-PC, a separate Windows-user setup and paths with non-ASCII characters (including
-Japanese) remain untested. This limited trial is not production acceptance.
+Owner-approved command with exit code 0. A second fresh Sandbox trial on
+2026-11-21 started without Python, Git or PowerShell 7: it installed Python
+3.13 and Git for Windows from their official installers, then `tools\setup.cmd`
+created `.venv`, installed the packages and ran the doctor, and the launch checks
+(`--check`) passed, also from a Japanese checkout path. It did not start a tunnel
+or connect ChatGPT. Another physical PC, a separate Windows-user setup and a live
+start from a non-ASCII checkout path remain untested; Japanese folder and file
+names inside allowed folders are covered by synthetic tests. These limited trials
+are not production acceptance.
 If a step does not match what you see, please open an issue. Do not include your key.
 
 For the optional [read-only Muse bridge](muse-bridge.md), use Tailscale on this
@@ -19,12 +24,71 @@ Muse plan terms can change.
 From v0.3.0 the read-only Muse bridge defaults to Tailscale identity. To keep using a
 token, start the bridge with `--auth token`, for example `tools\start-muse-bridge.cmd --auth token`.
 
+> **Check your ChatGPT plan first**
+>
+> - Custom MCP connections are web-only. OpenAI lists full MCP for Business and Enterprise/Edu. [OpenAI Help Center](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt) (checked 2026-11-20).
+> - The same page's FAQ says Pro can connect custom MCP servers for read/fetch only, so commands and edits would not be available there.
+> - The author uses Sora Commander on **Plus with developer mode**, including approved commands, as of November 2026.
+> - OpenAI's page does not list Plus. This setup can change at any time.
+> - Muse's read-only bridge is an alternative that needs Tailscale and the Python setup. It requires no ChatGPT plan.
+
+## What you need
+
+- **Python 3.13** with the Windows `py` launcher (the python.org installer adds it). Install 3.13 even if a newer version is offered; 3.14 has not been tested, and the helpers run `py -3.13`.
+- **Git for Windows** in its default folder, `C:\Program Files\Git`. The read-only Git tools use only that location, never `PATH`, and report `GIT_NOT_INSTALLED` otherwise. `tools\setup.cmd` also needs `git` on `PATH`, which the default installer sets.
+- **No PowerShell install is needed.** The launchers and helpers use only `.cmd` files and Python, so they do not need PowerShell 7 or Windows PowerShell 5.1. The few commands below marked `powershell` work in either PowerShell version.
+
+## Quick setup
+
+After running the `git clone` and `cd` commands in section 1, run
+`tools\setup.cmd` (or `tools\setup.cmd --muse-only` for the Muse bridge).
+The helper creates `.venv`,
+installs the packages from section 1, copies the example tunnel settings when
+`%USERPROFILE%\.config\tunnel-client\sora-next.yaml` does not exist yet (never
+over an existing file, and not with `--muse-only`), runs the doctor check, and
+lists the steps you still need to do by hand. Add `--check` to report without
+changing anything. Exit code 0 means nothing is on HOLD (TODO lines can remain),
+2 means a step is on HOLD, and 6 means the checkout path is not supported.
+Use the manual steps below as the reference.
+
+## Updating
+
+**Updating from v0.4.0:** v0.4.0 has no update helper, so update once by hand.
+Stop the tunnel, the Broker and the Muse bridge (and their logon tasks if you
+installed them). Then, in a clean checkout on `main`:
+
+```bat
+git pull --ff-only
+tools\setup.cmd --check
+```
+
+Follow any TODO or HOLD lines, then restart. From then on, use the helper below.
+
+From the checkout, run `tools\update.cmd --check` to preview the incoming
+release tags and find the release notes. The preview fetches tags and updates
+remote-tracking refs. To apply the update, run `tools\update.cmd`. It
+fast-forwards `main` to `origin/main`; the tags only name the release notes.
+
+The helper requires a clean `main` tracking the official HTTPS `origin/main`,
+and stops if it finds local changes, running Sora Commander processes from
+the checkout, or a non-fast-forward history. It prints how to stop the
+processes yourself and preserves ignored files that would be overwritten.
+After updating the code, it checks the Python packages offline. If packages
+are missing or incompatible, follow the prompt to run `tools\setup.cmd`
+separately before restarting. After any update, restart the services you use
+and refresh the tools in ChatGPT and on the Muse side.
+
 ## 1. Get the code and Python packages
 
 Use a folder only you can write to, with **no spaces anywhere in the checkout
 path**, for example `C:\SoraCommander`. The four launchers refuse a checkout
-path containing a space with exit code 6, including with `--check`. Paths with
-non-ASCII characters have not been verified; testing on another PC is pending.
+path containing a space with exit code 6, including with `--check`. The
+launchers, `tools\setup.cmd`, `tools\update.cmd` and the Broker logon task also
+refuse a path containing `& % ^ ! ( ) " < > |` or a non-printable character
+with exit code 6. Paths with
+non-ASCII characters passed `tools\setup.cmd` and the launchers' `--check` in a
+Windows Sandbox, but a live start from such a path has not been tried. Japanese
+folder and file names inside allowed folders pass synthetic tests.
 In PowerShell, starting from `C:\`:
 
 ```powershell
@@ -38,13 +102,13 @@ The launchers read the code from this folder, so only these packages are install
 
 ## 2. Get the tunnel program
 
-Download `tunnel-client` from OpenAI's Secure MCP Tunnel instructions, and put it here:
+Download `tunnel-client` from OpenAI's [Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels), and put it here:
 
 ```text
-tools\tunnel-client\v0.0.16\tunnel-client.exe
+tools\tunnel-client\<version>\tunnel-client.exe
 ```
 
-The launchers expect this exact path, so a newer version needs the path in the launchers changed. Only v0.0.16 has been tried.
+Name the version folder like v0.0.16: a lowercase `v` and three numbers separated by dots. The launchers use the highest valid version in this folder and skip linked folders or files. Only v0.0.16 has been tried by the author.
 
 ## 3. Create a tunnel and a key
 
@@ -52,20 +116,28 @@ The launchers expect this exact path, so a newer version needs the path in the l
 2. Create a runtime API key at <https://platform.openai.com/settings/organization/api-keys>.
 3. Store the key. **The prompt does not show it. Do not put it in any other file.**
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\Set-NextTunnelKey.ps1
+```bat
+tools\set-tunnel-key.cmd
 ```
+
+It saves `%USERPROFILE%\.config\tunnel-client\sora-next.key` so that only your
+Windows user can open it, and asks before replacing an existing key.
+`tools\set-tunnel-key.cmd --check` checks the saved file's form without showing
+it or contacting OpenAI (exit 0 valid, 4 missing, 5 malformed, 2 could not check, 6 unsupported checkout path).
+`--from-stdin` reads the key from standard input and replaces an existing key
+without asking. The previous PowerShell command using
+`tools\Set-NextTunnelKey.ps1` still works and calls the same helper.
 
 ## 4. Write the tunnel settings
 
-Copy [sora-next.example.yaml](sora-next.example.yaml) to `%USERPROFILE%\.config\tunnel-client\sora-next.yaml`, then replace the three values marked in it.
+If `tools\setup.cmd` did not already copy it, copy [sora-next.example.yaml](sora-next.example.yaml) to `%USERPROFILE%\.config\tunnel-client\sora-next.yaml`. Replace the three values marked in it: your tunnel ID, the absolute path of your key file and the path of your checkout. If the file already exists, edit it instead of copying over it.
 
 ### Allow your project folders
 
 From v0.1.9 you can also create and edit this file, `language.txt` and
 `tasks.json` in the optional Config Builder window instead of by hand:
 `py -3.13 -B tools\scn_config_builder.py`. It checks them with the same code
-the Host uses at startup. See [docs/config-builder.md](docs/config-builder.md).
+the Host uses at startup. See the [Config Builder guide](config-builder.md).
 The rules below still apply.
 
 Create `%USERPROFILE%\.config\sora-commander\allowed-roots.txt` by hand if you
@@ -115,8 +187,29 @@ Rejected folders include:
 - The user profile itself, AppData and its children.
 - Any folder containing this configuration file, `%USERPROFILE%\.config\tunnel-client`
   or `%LOCALAPPDATA%\SoraCommanderNext`; their private key/state folders are also excluded.
-- Paths containing a name refused by `file_reads.py`, including hidden names,
-  `temp`, `logs`, `runtime`, credential names and protected file suffixes.
+- Paths containing a protected name (listed below).
+
+**Protected names.** Inside allowed folders, files and folders with these names
+cannot be read and are silently left out of listings and searches, so ChatGPT
+or Muse does not see them at all. A direct read returns
+`sensitive path excluded from read scope`. Matching ignores case.
+
+- Any name starting with `.` (hidden), ending with a space or `.`, containing
+  `:` or a control character, or naming a device such as `CON`, `NUL`, `COM1` or `LPT1`.
+- Folder or file names: `state`, `runtime`, `logs`, `temp`, `venv`,
+  `node_modules`, `__pycache__`, `secret`, `secrets`, `token`, `tokens`,
+  `credential`, `credentials`, `private_key`, `private-key`, `private_keys`,
+  `private-keys`, `auth.json`, `oauth.json`, `api-keys.json`, `apikeys.json`,
+  `id_rsa`, `id_ed25519`, `id_dsa`, `id_ecdsa`, and Sora Commander's own journal files.
+- Names starting with `credential.`, `credentials.`, `secret.`, `secrets.`,
+  `token.`, `tokens.`, `api_key.`, `api-key.`, `private_key.` or `private-key.`
+  (so `token.py` or `token.ts` is hidden too).
+- Names ending with `.user.txt`, `.env`, `.pem`, `.key`, `.pfx`, `.p12`, `.jks`,
+  `.keystore`, `.kdbx`, `.sqlite`, `.sqlite3`, `.db`, `.db3`, `.wal`, `.shm`,
+  `.journal`, `.zip`, `.7z`, `.rar`, `.tar`, `.tgz`, `.gz`, `.bak` or `.backup`.
+
+These rules lean to the safe side and can hide ordinary project folders such
+as `src/state`. Open such files yourself if you need them.
 
 Configuration files reached through links or with invalid UTF-8 are refused too.
 The file is limited to 64 KiB. This list scopes file tools and command working
@@ -186,6 +279,33 @@ protection after a restart. Never use a mode change to retry an unknown command.
 The example YAML uses the Broker client; usual mode requires changing its command
 to the same folder's `next-development.cmd` before starting it.
 
+### Start at logon (optional)
+
+After completing setup, first check that Broker mode starts by hand as above.
+Then run `tools\install-broker-autostart.cmd` to register a
+task for your Windows sign-in. Installation starts nothing. To change an
+existing task, uninstall it first. At sign-in the
+task waits up to 3 minutes for a local default route, starts the Broker, then
+starts the ChatGPT tunnel once the Broker is ready. The task does not retry
+if startup fails or either process exits.
+
+While you are signed in, ChatGPT can read your allowed folders without
+opening an approval window, just as with a manual start. Actions that require
+approval still need you to respond at the PC.
+
+The log is `%LOCALAPPDATA%\SoraCommanderNext\broker-autostart.log`. At startup
+a log larger than 1 MiB is moved to `broker-autostart.log.1`. Use these
+commands to check the task, start it now, or stop it.
+
+```cmd
+schtasks /Query /TN "SoraCommander Broker mode"
+schtasks /Run /TN "SoraCommander Broker mode"
+schtasks /End /TN "SoraCommander Broker mode"
+```
+
+Run `tools\uninstall-broker-autostart.cmd` to remove the task. If the task is
+running, this ends it first, so check that no job is still running.
+
 ## 6. Connect ChatGPT
 
 Follow OpenAI's latest [Connecting custom MCP servers in ChatGPT](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
@@ -194,7 +314,15 @@ for eligibility, workspace permissions and connection steps. Use your Secure MCP
 Tunnel as directed there; screen names and procedures can change. After connecting,
 in a new chat ask for `ping`, `status`, `list_sessions` and `tool_catalog`.
 
-Expected: `status` shows `remote_ready: false` and `approval: LOCAL_DEMO_ONLY`, and there are 54 tools.
+Expected: `status` shows `remote_ready: false` and `approval: LOCAL_DEMO_ONLY`.
+
+| Configuration | Registered tools |
+| --- | ---: |
+| ChatGPT, started as in section 5 (Broker mode or usual mode; the edit/create pilot is on) | 54 |
+| ChatGPT Host with the edit/create pilot turned off | 48 |
+| Muse read-only bridge | 36, or 37 with `--inbox` |
+
+Older sections give the tool count at the release they describe.
 
 ChatGPT's file tools reach the configured allowed folders (the checkout only if
 the file is absent). **A command you approve runs with your own Windows rights,
@@ -206,16 +334,26 @@ If ChatGPT says the review ended with no decision, nothing ran; ask again when y
 
 Run `.venv\Scripts\python.exe tools\scn_doctor.py` for a read-only setup check
 with fix hints. It starts nothing and never reads the tunnel key or YAML.
-Use `--lang en` or `--lang ja` to override the window language. WARN is
+Use `--lang en` or `--lang ja` to choose the language of this report; the
+approval windows follow `language.txt` instead. WARN is
 informational; HOLD gives exit code 1. Restart the Broker and client after
 changing configuration.
+
+Exit code 6 from a launcher means an unsupported checkout path. From the
+Broker itself (its own window), it means another process already holds the
+Owner journal.
 
 | What you see | What it means | What to do |
 |---|---|---|
 | `A tunnel is already running or port 8080 is in use` | A tunnel is up, or something else holds the port | Do not start a second one |
 | `A tunnel is running. Stop it first` | The Broker must start before the tunnel | Stop the tunnel, then start in the order above |
+| `A Broker is already running` | Broker mode is already up | Start only the tunnel with `tools\start-sora-commander-broker-dev.cmd` |
+| `The Broker pipe was not ready within 30 seconds` | The Broker did not start | Read the Broker window, fix the cause, then start again |
+| `Could not check ...` (exit 2) | Windows could not answer a start check, so nothing was started | Try again later; if it repeats, report the line |
+| `Required local component is missing` (exit 2) | A file the launcher needs is absent, often `.venv` | Run `tools\setup.cmd`, or check the release checkout |
+| `GIT_NOT_INSTALLED` | Git for Windows is not in `C:\Program Files\Git` | Install it in the default folder |
 | `No key file` or `The key file must hold the key only` | The key is missing or malformed | Run step 3 again |
-| `Development virtual environment not found` | `.venv` is missing | Run step 1 |
+| `Development virtual environment not found` | `.venv` is missing | Run `tools\setup.cmd` or step 1 |
 | `The folder path contains a space` (exit 6) | Unsupported checkout path | Move the checkout to a path without spaces, such as `C:\SoraCommander` |
 | `allowed-roots line ...` | Invalid or unreadable local folder configuration | Correct the indicated line by hand, then restart both processes |
 | A window you did not ask for | Possibly an old or repeated request | **Reject it** |

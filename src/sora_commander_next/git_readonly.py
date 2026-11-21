@@ -18,7 +18,7 @@ OPTIONS = (
     "-c", "core.pager=cat", "-c", "diff.external=",
     "-c", "core.untrackedCache=false", "-c", "protocol.allow=never",
     "-c", "protocol.https.allow=always", "-c", "credential.helper=",
-    "-c", "log.showSignature=false", "-c", "core.quotePath=true",
+    "-c", "log.showSignature=false", "-c", "core.quotePath=false",
     "-c", "core.askPass=",
     "--no-pager", "--literal-pathspecs",
 )

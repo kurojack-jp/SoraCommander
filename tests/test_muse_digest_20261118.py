@@ -38,7 +38,8 @@ class DigestTests(unittest.IsolatedAsyncioTestCase):
     def build_digest(self, checkout=_CHECKOUT, roots=()):
         host = Host(policy=Policy(roots=(), read_only_roots=roots))
         self.addCleanup(host.close)
-        server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False)
+        server = build_server(host, dev_writes_enabled=False, dev_tools_enabled=False,
+                              command_tools_enabled=False)
         register_digest(server, host, checkout=checkout, auth="both", inbox=False)
         return server
 
@@ -47,6 +48,7 @@ class DigestTests(unittest.IsolatedAsyncioTestCase):
         original = activity.observe
         with patch.object(activity, "observe", wraps=original) as observe:
             default = await _call(server, "bridge_digest")
+            self.assertEqual(default["status"]["registered_tool_count"], 36)
             self.assertEqual(list(default), ["status", "git", "activity", "truncated"])
             self.assertEqual(observe.call_args.args[1], {"mode": "recent", "limit": 5})
             observe.reset_mock()
