@@ -126,7 +126,7 @@ def frame_data(raw):
 
 class FrameTests(NoRealDialogTestCase):
     def test_a_frame_is_ascii_with_exact_text_and_labels(self):
-        raw = gate.request_frame("f" * 64, patch_proposal(), 45.0)
+        raw = gate.request_frame("f" * 64, patch_proposal(), 45.0, locale="ja")
         data = frame_data(raw)
         self.assertEqual(data.keys(), child._FIELDS)
         self.assertEqual(child.parse_request(raw), data)
@@ -137,13 +137,13 @@ class FrameTests(NoRealDialogTestCase):
     def test_the_largest_allowed_file_fits_even_if_every_byte_is_escaped(self):
         for content in ("\x01" * 65536, "語" * 21845, "a" * 65536):
             with self.subTest(content=content[:1]):
-                raw = gate.request_frame("f" * 64, create_proposal(content), 45.0)
+                raw = gate.request_frame("f" * 64, create_proposal(content), 45.0, locale="ja")
                 self.assertLessEqual(len(raw), gate.MAX_REQUEST)
                 child.parse_request(raw)
 
     def test_an_oversized_frame_is_refused(self):
         with self.assertRaises(ValueError):
-            gate.request_frame("f" * 64, create_proposal("\x01" * 200000), 45.0)
+            gate.request_frame("f" * 64, create_proposal("\x01" * 200000), 45.0, locale="ja")
 
     def test_the_two_sides_share_one_limit(self):
         self.assertEqual(gate.MAX_REQUEST, child.MAX_REQUEST)
@@ -188,6 +188,7 @@ class GateTests(NoRealDialogTestCase):
         self.latch = Mock()
         self.latch.start.return_value = self.latch
         self.job = Mock()
+        self.enterContext(patch.object(gate, "owner_ui_language", return_value="ja"))
         for target, value in (("OwnerSessionEventLatch", Mock(return_value=self.latch)),
                               ("WindowsJob", Mock(return_value=self.job))):
             patcher = patch.object(gate, target, value)
@@ -361,7 +362,7 @@ def fake_tk():
 
 
 def valid_frame(**updates):
-    data = frame_data(gate.request_frame("f" * 64, patch_proposal(), 9.0))
+    data = frame_data(gate.request_frame("f" * 64, patch_proposal(), 9.0, locale="ja"))
     data.update(updates)
     return (json.dumps(data) + "\n").encode()
 

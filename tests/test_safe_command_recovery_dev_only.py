@@ -6,12 +6,12 @@ authenticated MCP reads, legacy archive compatibility and no automatic replay.
 import asyncio
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from sora_commander_next.commands import Command
+from tests._inherited_test_temp import inherited_test_temp
+from sora_commander_next.commands import Command, absolute
 from sora_commander_next.host import Host
 from sora_commander_next.jobs import JobManager
 from sora_commander_next.mcp_adapter import build_server
@@ -45,6 +45,20 @@ class SafeCommandRecoveryTests(unittest.TestCase):
             "executable": exe, "argv": ["--version"], "cwd": cwd,
             "token": "FORGED"}))
 
+    def test_safe_identity_retains_canonical_cwd_for_short_input(self):
+        root = Path.cwd()
+        short = root / "SCNREC~1"
+        canonical = root / "scn-recovery-fixture"
+        resolve = Path.resolve
+
+        def resolve_fixture(path, *args, **kwargs):
+            return canonical if path == short else resolve(path, *args, **kwargs)
+
+        with patch.object(Path, "resolve", autospec=True, side_effect=resolve_fixture):
+            command = Command(sys.executable, ("--version",), str(short))
+        identity = safe_command_identity(command.executable, command.argv, command.cwd)
+        self.assertEqual(identity["cwd"], str(canonical))
+
     def _one_job(self, temp, argv, rid):
         home = Path(temp)
         journal = home / "owner-session-journal.json"
@@ -66,11 +80,12 @@ class SafeCommandRecoveryTests(unittest.TestCase):
         return journal, archive, started["session_id"]
 
     def test_safe_full_command_available_only_after_owner_verification(self):
-        with tempfile.TemporaryDirectory(prefix="sora-safe-cmd-") as d:
+        with inherited_test_temp() as d:
+            expected_cwd = absolute(d)
             journal, archive, sid = self._one_job(d, ("--version",), "a" * 32)
             archived = read_previous_results(archive)["results"][0]
             self.assertEqual(archived["safe_command"]["argv"], ["--version"])
-            self.assertEqual(archived["safe_command"]["cwd"], d)
+            self.assertEqual(archived["safe_command"]["cwd"], expected_cwd)
             reopened = JobManager(journal_path=journal, output_archive_path=archive)
             try:
                 host = Host(jobs=reopened)
@@ -92,7 +107,7 @@ class SafeCommandRecoveryTests(unittest.TestCase):
                     self.assertTrue(row["command_identified"])
                     self.assertEqual(row["request_id"], "a" * 32)
                     self.assertEqual(row["safe_command"]["argv"], ["--version"])
-                    self.assertEqual(row["safe_command"]["cwd"], d)
+                    self.assertEqual(row["safe_command"]["cwd"], expected_cwd)
                     self.assertIn("--version", row["command_line"])
                     self.assertFalse(row["auto_retry"])
                     index = host.previous_output()
@@ -116,7 +131,7 @@ class SafeCommandRecoveryTests(unittest.TestCase):
     def test_inline_script_or_secret_never_persisted_even_when_executed(self):
         sentinel = "FAKE-PRIVATE-VALUE-DO-NOT-STORE"
         source = "print('OK') # " + sentinel
-        with tempfile.TemporaryDirectory(prefix="sora-unsafe-cmd-") as d:
+        with inherited_test_temp() as d:
             journal, archive, sid = self._one_job(d, ("-c", source), "b" * 32)
             raw = archive.read_text(encoding="ascii")
             self.assertNotIn(sentinel, raw)
@@ -138,7 +153,7 @@ class SafeCommandRecoveryTests(unittest.TestCase):
 
     def test_old_archive_and_forged_full_command_are_rejected_safely(self):
         from time import time
-        with tempfile.TemporaryDirectory(prefix="sora-legacy-cmd-") as d:
+        with inherited_test_temp() as d:
             archive = Path(d) / "owner-output-archive.json"
             original = {
                 "request_id": "c" * 32, "session_id": "d" * 48,

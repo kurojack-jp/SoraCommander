@@ -6,22 +6,19 @@ directory. No jobs, UI, protected paths, IPC, deployment or permanent changes.
 import ast
 import ctypes
 from ctypes import wintypes
-from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
-import uuid
 
+from tests._inherited_test_temp import inherited_test_temp
 from tests._test_owner_lease import isolated_owner_lease
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,19 +44,14 @@ except BrokerOwnerLeaseError:
 '''
 
 
-@contextmanager
-def _temporary_directory():
-    # Python's Windows mkdir(mode=0o700) can exclude a restricted test token.
-    # Inherit the existing temp parent's ACL; do not rewrite any directory ACL.
-    parent = Path(tempfile.gettempdir()).resolve()
-    directory = parent / ("next-owner-lease-" + uuid.uuid4().hex)
-    directory.mkdir()
-    try:
-        yield directory
-    finally:
-        if directory.resolve().parent != parent:
-            raise RuntimeError("unexpected test cleanup target")
-        shutil.rmtree(directory)
+def _sddl_trustee_sids(sddl):
+    import win32security
+
+    parsed = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
+        sddl, win32security.SDDL_REVISION_1)
+    dacl = parsed.GetSecurityDescriptorDacl()
+    return [win32security.ConvertSidToStringSid(dacl.GetAce(i)[2])
+            for i in range(dacl.GetAceCount())]
 
 
 @unittest.skipUnless(os.name == "nt", "actual Windows required")
@@ -110,7 +102,7 @@ class BrokerOwnerLeaseTests(unittest.TestCase):
 
     def test_real_child_denied_while_parent_holds_then_child_acquires(self):
         first = self.candidate()
-        with _temporary_directory() as directory:
+        with inherited_test_temp() as directory:
             child = Path(directory) / "lease_child.py"
             child.write_text(_CHILD, encoding="utf-8")
 
@@ -178,14 +170,14 @@ class BrokerOwnerLeaseTests(unittest.TestCase):
                     prefix, *aces = text.value.split("(")
                     self.assertEqual(prefix, "D:P")
                     self.assertEqual(len(aces), 3)
-                    trustees = []
                     for ace in aces:
-                        kind, flags, rights, object_id, inherited_id, trustee = ace.rstrip(")").split(";")
+                        kind, flags, rights, object_id, inherited_id, _ = ace.rstrip(")").split(";")
                         self.assertEqual((kind, flags, object_id, inherited_id), ("A", "", "", ""))
                         # Object Manager may map GENERIC_ALL to MUTEX_ALL_ACCESS.
                         self.assertIn(rights, ("GA", "0x1f0001"))
-                        trustees.append(trustee)
-                    self.assertEqual(trustees, ["SY", "BA", candidate._identity.sid])
+                    # Windows may serialize the actual Owner SID as LA for RID 500.
+                    self.assertEqual(_sddl_trustee_sids(text.value),
+                                     ["S-1-5-18", "S-1-5-32-544", candidate._identity.sid])
                 finally:
                     self.assertFalse(lease._LocalFree(ctypes.cast(text, wintypes.HANDLE)))
             finally:
@@ -193,6 +185,14 @@ class BrokerOwnerLeaseTests(unittest.TestCase):
             flags = wintypes.DWORD()
             self.assertTrue(get_flags(candidate._handle, ctypes.byref(flags)))
             self.assertEqual(flags.value & 1, 0)
+
+    def test_local_administrator_alias_matches_numeric_sid(self):
+        aliased = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;LA)"
+        system, admins, local_admin = _sddl_trustee_sids(aliased)
+        self.assertEqual((system, admins), ("S-1-5-18", "S-1-5-32-544"))
+        self.assertRegex(local_admin, r"^S-1-5-21-(?:[0-9]+-){3}500$")
+        numeric = aliased.replace(";;;LA)", f";;;{local_admin})")
+        self.assertEqual(_sddl_trustee_sids(numeric), [system, admins, local_admin])
 
     def test_no_acquisition_during_construction(self):
         with patch.object(lease, "_CreateMutexW") as create:
