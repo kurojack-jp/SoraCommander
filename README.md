@@ -82,7 +82,7 @@ New launcher names, release-tag updates and clearer file listings.
 - **Folder listings.** `list_folder` and `list_folder_page` report `omitted_entries` before applying the output limit or pagination.
 - **Muse.** Concurrent identity lookups for the same address reuse a cached result when available. The digest reports `CHECKOUT_NOT_IN_READ_ROOTS` if the checkout is outside the read roots.
 - **Shorter tool help.** Shared approval rules are in the server instructions. When the Owner closes a review window, report that it closed without a decision.
-- **Windows tests.** The public workflow runs on pull requests and on manual dispatch.
+- **Windows tests.** The public workflow runs on pull requests and on manual dispatch. It skips the real Broker installation observation because GitHub-hosted runners have no Broker installation.
 
 ## New in v0.5.0
 
@@ -325,7 +325,7 @@ Brokerのパイプが用意できるまで待ってからトンネルを起動�
 - **フォルダ一覧。** `list_folder` と `list_folder_page` は出力上限やページ分けを適用する前の `omitted_entries` を返します。
 - **Muse。** 同じアドレスへの同時照会では利用可能なキャッシュを再利用します。checkout が読み取り許可範囲外の場合、digest は `CHECKOUT_NOT_IN_READ_ROOTS` を返します。
 - **ツール説明の短縮。** 承認の共通ルールをサーバー説明にまとめました。Owner が承認窓を閉じた場合は、未決定のまま閉じたと伝えます。
-- **Windows テスト。** 公開版のワークフローはプルリクエストと手動で実行できます。
+- **Windows テスト。** 公開版のワークフローはプルリクエストと手動で実行できます。GitHub ホスト型ランナーには Broker がインストールされていないため、実インストールの観測テストを1件スキップします。
 
 ## v0.5.0 の変更
 

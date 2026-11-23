@@ -28,6 +28,9 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install "mcp>=1,<2" "pydantic>=2,<3" "pywin32>=306"
           exit $LASTEXITCODE
       - name: Run the public test modules with the dialog guard
+        # Skip the real Broker installation observation because GitHub-hosted runners have no Broker installation.
+        env:
+          SCN_HOSTED_CI: "1"
         run: |
           $entries = @(Get-Content -LiteralPath 'docs/public_release/tests.txt' |
             ForEach-Object { $_.Trim() } |

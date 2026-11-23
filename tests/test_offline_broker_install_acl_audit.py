@@ -120,6 +120,8 @@ class ProtectedFoundationAuditTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Windows installation foundation")
     def test_real_windows_foundation_readonly_observation(self):
+        if os.environ.get("SCN_HOSTED_CI") == "1":
+            self.skipTest("No real Broker install on a GitHub-hosted runner")
         rows = audit_foundation_readonly()
         self.assertEqual(tuple(row.label for row in rows),
                          ("CODE_ROOT", "ADMIN_DATA", "TRUST"))

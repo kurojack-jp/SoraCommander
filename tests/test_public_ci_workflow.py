@@ -53,9 +53,27 @@ class PublicCIWorkflowTests(unittest.TestCase):
     def test_public_modules_run_through_dialog_guard(self):
         self.assertRegex(
             self.workflow,
+            r'(?m)^      - name: Run the public test modules with the dialog guard\n'
+            r'(?:        #[^\n]*\n)*        env:\n'
+            r'          SCN_HOSTED_CI: "1"\n        run: \|$',
+        )
+        self.assertEqual(self.workflow.count("SCN_HOSTED_CI"), 1)
+        self.assertRegex(
+            self.workflow,
             r"(?m)^ +\.\\\.venv\\Scripts\\python\.exe -B tests\\"
             r"run_with_real_dialog_guard\.py @modules$",
         )
+
+    def test_hosted_ci_marker_is_absent_from_src_and_tools(self):
+        root = Path(__file__).resolve().parents[1]
+        for directory in ("src", "tools"):
+            scan_root = root / directory
+            self.assertTrue(scan_root.is_dir())
+            matches = [
+                path.relative_to(root) for path in sorted(scan_root.rglob("*"))
+                if path.is_file() and b"SCN_HOSTED_CI" in path.read_bytes()
+            ]
+            self.assertEqual(matches, [])
 
 
 class PublicCIActionPinTests(unittest.TestCase):
