@@ -98,6 +98,9 @@ class FileAclNegativeTests(unittest.TestCase):
             self.assertEqual(acl("/inheritance:r").returncode,0)
             for principal in ("*"+sid,"*S-1-5-18","*S-1-5-32-544"):
                 self.assertEqual(acl("/grant:r",principal+":(OI)(CI)F").returncode,0)
+            # Some hosts (a GitHub-hosted runner, 2026-11-23) leave an explicit
+            # OWNER RIGHTS (S-1-3-4) ACE here; the fixture needs exactly three.
+            self.assertEqual(acl("/remove:g","*S-1-3-4").returncode,0)
             journal=directory/"owner-session-journal.json"
             # Owner storage requires explicit protected stage/lock ACLs.
             # Plain write_snapshot (unprotected DEV mode) must not pass this check.
