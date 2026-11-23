@@ -191,6 +191,8 @@ class SetupHelperTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(r"tools\start-muse-bridge-tailscale.cmd", output)
         self.assertIn("tcp:8765", output)
+        self.assertIn("muse-bridge-peers.json", output)
+        self.assertIn("StableID", output)
         self.assertNotIn("ChatGPT", output)
         self.assertFalse(self.tunnel.exists())
         self.assertEqual(self.calls.call_args.args[0][3:5], ["-c", scn_setup.MUSE_DOCTOR])

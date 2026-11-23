@@ -311,13 +311,13 @@ def release_tags(root):
     return sorted(tags, key=tags.__getitem__)
 
 
-def check_packages(root):
+def check_packages(root, release):
     # Run the newly checked-out setup package step in a fresh interpreter.
     # Its check mode skips installs. The additional probe makes TODOs a HOLD.
     result = run([sys.executable, "-I", "-B", "-c", PACKAGE_CHECK], root)
     if result.returncode:
-        raise UpdateHold(r"Packages could not be verified offline. "
-                         r"Run tools\setup.cmd separately before restarting.")
+        raise UpdateHold(f"The code is already at {release}, but packages could not be "
+                         r"verified offline. Run tools\setup.cmd before restarting.")
     print("[OK] The updated setup package requirements are satisfied.")
 
 
@@ -355,7 +355,7 @@ def main(argv=None, *, root=ROOT):
                                  allow_one=True) is not None:
             print(f"[OK] Already current. No update needed for {latest}.")
             if not args.check:
-                check_packages(root)
+                check_packages(root, latest)
             return 0
 
         if git(root, "merge-base", "--is-ancestor", head, target, allow_one=True) is None:
@@ -375,7 +375,7 @@ def main(argv=None, *, root=ROOT):
         git(root, "merge", "--ff-only", "--no-overwrite-ignore", target,
             failure="Fast-forward failed. Inspect Git status before continuing.")
         print(f"[DONE] Fast-forwarded main to release {latest}.")
-        check_packages(root)
+        check_packages(root, latest)
         print(r"[TODO] Restart Broker mode with tools\start-broker-mode.cmd or its logon task.")
         print(r"[TODO] If you use usual mode, restart it with tools\start-usual-mode.cmd.")
         print(r"[TODO] Restart the Muse bridge with its launcher or logon task.")

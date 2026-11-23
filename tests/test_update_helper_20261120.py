@@ -360,7 +360,8 @@ class UpdateHelperTests(unittest.TestCase):
         self.setup_result = 2
         self.assertEqual(self.invoke(), 2)
         self.assertEqual(self.mutations(), ["fetch", "merge", "setup"])
-        self.assertIn("Packages could not be verified offline", self.output.getvalue())
+        self.assertIn("[HOLD] The code is already at v1.11.0, but packages could not be "
+                      "verified offline.", self.output.getvalue())
 
     def test_path_with_space_exits_six_before_any_command(self):
         self.root = Path("checkout with space")

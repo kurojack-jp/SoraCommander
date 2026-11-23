@@ -219,6 +219,9 @@ def finish(root, command, muse_only, environ):
 
     print("\nNext steps")
     if muse_only:
+        print(r"[TODO] Copy docs\muse-bridge-peers.example.json to "
+              r"%USERPROFILE%\.config\sora-commander\muse-bridge-peers.json and put "
+              "your Muse agent's StableID in readonly (docs/muse-bridge.md, Setup).")
         print("[TODO] In Tailscale Access controls, limit the Muse node to this PC's "
               "tcp:8765 as described in docs/muse-bridge.md.")
         print(r"[TODO] Start the Muse bridge with tools\start-muse-bridge-tailscale.cmd.")
