@@ -77,7 +77,7 @@ class SensitiveReadRootTests(unittest.TestCase):
                         "synthetic only")
                     self.assertEqual(reads.list_folder(str(folder), (str(folder),)),
                                      {"entries": [{"name": "inner.txt", "type": "file"}],
-                                      "truncated": False})
+                                      "truncated": False, "omitted_entries": 0})
 
     def test_data_suffix_below_root_is_still_denied(self):
         root = self.make("ordinary-root")

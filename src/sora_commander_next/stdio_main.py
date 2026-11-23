@@ -82,6 +82,15 @@ def owner_journal_path(repo_root=None, *, storage_override=None):
 def main():
     # Explicit local pilot only. Default stdio remains deny-only.
     import os
+    import sys
+    from functools import partial
+    from .owner_ui_language import DevWriteToolsError, resolve_dev_write_tools
+    try:
+        enabled = resolve_dev_write_tools()
+    except DevWriteToolsError as error:
+        print(f"[HOLD] dev-write-tools.txt: {error}", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
+    serve = partial(serve_stdio, dev_write_tools_enabled=True) if enabled else serve_stdio
     if os.environ.get("SORA_NEXT_PRODUCT_BROKER") == "1":
         # Product selection never falls through to the legacy execution/GUI
         # pilots, even when the Broker is unavailable or construction fails.
@@ -91,17 +100,17 @@ def main():
                 "SORA_NEXT_RESULT_ARCHIVE_PILOT")):
             raise RuntimeError("product Broker and legacy pilots are mutually exclusive")
         from .product_composition import build_product_host
-        serve_stdio(build_product_host())
+        serve(build_product_host())
         return
     if os.environ.get("SORA_NEXT_OWNER_REVIEW_PILOT") != "1":
-        serve_stdio(Host())
+        serve(Host())
         return
 
     from .owner_journal_lease import OwnerJournalLeaseError, owner_journal_lease
     try:
         with owner_journal_lease(os.environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"):
             # serve_stdio closes the Host in its own finally, before returning.
-            serve_stdio(build_owner_pilot_host())
+            serve(build_owner_pilot_host())
     except OwnerJournalLeaseError as error:
         import sys
         print(f"[HOLD] {error}; stdio pilot not started.", file=sys.stderr, flush=True)

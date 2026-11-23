@@ -159,7 +159,9 @@ class ToolTests(unittest.TestCase):
                          {"name", "wait_seconds", "request_id"})
         self.assertEqual(tools["list_tasks"].parameters.get("properties", {}), {})
         self.assertIn("approval window opens for every run", tools["run_task"].description)
-        self.assertIn("never resubmit or ask for the window again", tools["run_task"].description)
+        self.assertIn("Follow Owner review outcomes in server instructions.", tools["run_task"].description)
+        self.assertIn("Never resubmit", self.sdk.instructions)
+        self.assertIn("or ask for the window again", self.sdk.instructions)
         self.assertIn("no approval window", tools["list_tasks"].description)
 
 
@@ -199,7 +201,7 @@ class StartupTests(unittest.TestCase):
         # The shared pilot composition reads the process environment unless a
         # local caller passes its own mapping; main() passes none.
         self.assertIn("environ = os.environ if environ is None else environ", source)
-        self.assertIn("serve_stdio(build_owner_pilot_host())", source)
+        self.assertIn("serve(build_owner_pilot_host())", source)
         self.assertIn("task_presets = load_task_presets(environ)", source)
         self.assertIn('print(f"[HOLD] tasks.json: {error}", file=sys.stderr', source)
         self.assertIn("host.task_presets = task_presets", source)

@@ -1,14 +1,17 @@
 """Synthetic coverage of the Muse logon task, including its publication."""
 
 import codecs
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import importlib.util
 import io
+import logging
 import os
 from pathlib import Path, PureWindowsPath
 import stat
 import subprocess
 import sys
+from threading import Barrier
 from types import SimpleNamespace
 import unittest
 from unittest.mock import call, patch
@@ -339,3 +342,142 @@ class AutostartDiskTests(unittest.TestCase):
         self.assertIn("[HOLD] ordinary directory required: SoraCommanderNext", self.stderr.getvalue())
         self.run.assert_not_called()
         self.bridge.assert_not_called()
+
+    def _run_with_small_log(self, bridge_output, *, limit=256):
+        self.run.return_value = self._ready()
+        self.bridge.side_effect = bridge_output
+        with patch.object(autostart, "LOG_LIMIT", limit):
+            self.assertEqual(autostart.main(["run"]), 0)
+
+    def test_run_rotates_by_utf8_bytes_and_keeps_one_older_log(self):
+        self.log.parent.mkdir()
+        self.rotated.write_text("previous run", encoding="utf-8")
+        first, second, third = "a" * 140, "界" * 60, "c" * 140
+
+        def output(_):
+            print(first)
+            self.assertEqual(self.rotated.read_text(encoding="utf-8"), "previous run")
+            print(second)
+            self.assertIn(first, self.rotated.read_text(encoding="utf-8").splitlines())
+            print(third)
+            return 0
+
+        self._run_with_small_log(output)
+        self.assertEqual(self.rotated.read_text(encoding="utf-8").splitlines(),
+                         ["[INFO] Log rotated.", second])
+        self.assertEqual(self.log.read_text(encoding="utf-8").splitlines()[:2],
+                         ["[INFO] Log rotated.", third])
+        self.assertCountEqual(self.log.parent.iterdir(), [self.log, self.rotated])
+
+    def test_run_keeps_threaded_print_lines_intact(self):
+        barrier = Barrier(4, timeout=5)
+
+        def writer(number):
+            print(f"thread {number} ", end="")
+            barrier.wait()
+            print(f"finished {number}")
+
+        def output(_):
+            with ThreadPoolExecutor(max_workers=4) as threads:
+                list(threads.map(writer, range(4)))
+            self.assertCountEqual(self.log.read_text(encoding="utf-8").splitlines()[1:],
+                                  [f"thread {n} finished {n}" for n in range(4)])
+            return 0
+
+        self._run_with_small_log(output)
+
+    def test_run_keeps_writing_and_limits_rotation_warnings(self):
+        warning = "[WARN] Log rotation failed (OSError)."
+
+        def output(_):
+            print("a" * 256)
+            print("after same failure")
+            self.assertEqual(self.log.read_text(encoding="utf-8").splitlines().count(warning), 1)
+            print("b" * (1024 * 1024))
+            print("after one MiB")
+            return 0
+
+        with patch.object(autostart.os, "replace", side_effect=OSError("private synthetic detail")):
+            self._run_with_small_log(output)
+        lines = self.log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines.count(warning), 2)
+        self.assertIn("after same failure", lines)
+        self.assertIn("after one MiB", lines)
+        self.assertNotIn("private synthetic detail", "\n".join(lines))
+        self.assertFalse(self.rotated.exists())
+
+    def test_run_refuses_linked_log_during_rotation(self):
+        original_lstat = Path.lstat
+        tampered = False
+
+        def lstat(path, *args, **kwargs):
+            if tampered and path == self.log:
+                return SimpleNamespace(st_mode=stat.S_IFLNK, st_nlink=1)
+            return original_lstat(path, *args, **kwargs)
+
+        def output(_):
+            nonlocal tampered
+            tampered = True
+            print("a" * 256)
+            return 0
+
+        with patch.object(Path, "lstat", lstat), patch.object(autostart.os, "replace") as replace:
+            self._run_with_small_log(output)
+        replace.assert_not_called()
+        lines = self.log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("[WARN] Log rotation failed (Hold).", lines)
+        self.assertIn("a" * 256, lines)
+
+    def test_run_refuses_nonordinary_archive_during_rotation(self):
+        def output(_):
+            self.rotated.mkdir()
+            print("a" * 256)
+            return 0
+
+        with patch.object(autostart.os, "replace") as replace:
+            self._run_with_small_log(output)
+        replace.assert_not_called()
+        self.assertTrue(self.rotated.is_dir())
+        self.assertIn("a" * 256, self.log.read_text(encoding="utf-8").splitlines())
+
+    def test_run_keeps_writing_after_fresh_log_open_fails(self):
+        original_open = Path.open
+
+        def open_log(path, mode, **kwargs):
+            if path == self.log and mode == "x":
+                raise OSError("synthetic reopen failure")
+            return original_open(path, mode, **kwargs)
+
+        def output(_):
+            with patch.object(Path, "open", open_log):
+                print("a" * 256)
+            self.assertIn("a" * 256, self.rotated.read_text(encoding="utf-8").splitlines())
+            print("after recovery")
+            return 0
+
+        self._run_with_small_log(output)
+        self.assertEqual(self.log.read_text(encoding="utf-8").splitlines()[:2],
+                         ["[INFO] Log rotated.", "after recovery"])
+        self.assertIn("[WARN] Log rotation failed (OSError).",
+                      self.rotated.read_text(encoding="utf-8").splitlines())
+
+    def test_uvicorn_style_stderr_handler_keeps_following_rotations(self):
+        first, second, third = "a" * 140, "b" * 140, "c" * 140
+
+        def output(_):
+            logger = logging.Logger("synthetic.uvicorn")
+            handler = logging.StreamHandler(sys.stderr)
+            logger.addHandler(handler)
+            try:
+                print(first)
+                logger.warning(second)
+                logger.warning(third)
+            finally:
+                handler.close()
+            return 0
+
+        self._run_with_small_log(output)
+        self.assertEqual(self.rotated.read_text(encoding="utf-8").splitlines(),
+                         ["[INFO] Log rotated.", second])
+        self.assertEqual(self.log.read_text(encoding="utf-8").splitlines()[:2],
+                         ["[INFO] Log rotated.", third])

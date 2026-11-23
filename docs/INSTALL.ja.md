@@ -41,29 +41,35 @@ Museブリッジだけを使う場合は `tools\setup.cmd --muse-only` を実行
 
 ## 更新する
 
-**v0.4.0 から更新するとき：** v0.4.0 には更新ヘルパーがないので、1 回だけ手で更新します。
-トンネル、Broker、Museブリッジを止めます（ログオン時のタスクを登録していれば、それも止めます）。
-そのうえで、変更のない `main` の checkout で次を実行します。
+**v0.5.0 または v0.4.0 から。** 公式の v0.6.0 公開を待ちます。
+v0.5.0 のヘルパーは `origin/main` まで進めます。v0.4.0 にはヘルパーがありません。
+タグを指定して更新するには、トンネル、Broker、Muse ブリッジと、動作中のログオンタスクを止めます。
+公式 HTTPS の `origin/main` を追跡する、変更のない `main` で作業します。
+注釈付きタグを取得し、マージ前に公式の GitHub リリースと照合します。
+タグを確認できない場合や、早送りできない場合は停止します。
 
 ```bat
-git pull --ff-only
+git fetch --tags origin
+git show --no-patch v0.6.0
+git merge --ff-only --no-overwrite-ignore v0.6.0
 tools\setup.cmd --check
 ```
 
-TODO や HOLD の行があれば対応してから、起動し直します。次からは下のヘルパーを使えます。
+TODO や HOLD に対処してから再起動します。既存スクリプトとタスクは[ランチャー名の変更](#v06-でランチャー名を変更)を参照してください。
+`dev-write-tools.txt` を作るのは [DEV 書き込みツール](#dev書き込みツールを有効にする任意)を使う場合だけです。
 
-checkoutで `tools\update.cmd --check` を実行すると、追加されるリリースタグと
-リリースノートのURLを確認できます。この確認でもタグの取得とリモート追跡参照の
-更新が行われます。更新を適用するには `tools\update.cmd` を実行してください。
-`main` を `origin/main` まで早送りします。タグはリリースノートを示すためのものです。
+**v0.6.0 以降から。** `tools\update.cmd --check` で最新リリースを確認します。
+確認時もタグとリモート追跡参照を取得します。更新があるときはリリースノートの URL が表示されます。
+適用には `tools\update.cmd` を使います。注釈付きの `vX.Y.Z` タグから版番号が最大のものを選びます。
+タグを公式 HTTPS の origin と照合し、そのコミットに `origin/main` から到達できることを確認します。
+署名の検証は行わず、公式 HTTPS の origin を信頼します。
+`main` がタグのコミットを含む場合、コード更新は不要です。
 
-公式HTTPSリポジトリの `origin/main` を追跡するクリーンな `main` が必要です。
-ローカル変更がある場合、このcheckoutのSora Commanderプロセスが動いている場合、
-または早送りできない場合は停止します。プロセスを手動で止める方法を表示し、
-上書きされる可能性のある無視対象ファイルも保護します。
-コード更新後はPythonパッケージをオフラインで確認します。不足や互換性の問題が
-ある場合は、案内に従って再起動前に `tools\setup.cmd` を別途実行してください。
-更新のあとは、使っているサービスを再起動し、ChatGPT と Muse 側でツールを再読み込みしてください。
+既定のフォルダにインストールされた Git for Windows を使います。公式の `origin/main` を追跡するクリーンな `main` が必要です。
+checkout が停止中と確認できない場合や、無視対象ファイルを保護したまま早送りできない場合は停止します。
+更新後は Python パッケージをオフラインで確認します。HOLD に対処してから再起動します。
+パッケージ確認で案内が出た場合は、`tools\setup.cmd` を別に実行します。
+使うサービスを再起動し、ChatGPT と Muse 側でツールを再読み込みしてください。
 
 ## 1. コードとPythonパッケージを入手する
 
@@ -138,7 +144,7 @@ read: C:\Work\ReferenceNotes
 - この設定ファイル、`%USERPROFILE%\.config\tunnel-client`、`%LOCALAPPDATA%\SoraCommanderNext`を内側に含むフォルダ。キーや状態データを置くこれらの非公開フォルダも除外します。
 - 保護対象の名前（下の一覧）を含むパス。
 
-**保護対象の名前。** 許可フォルダの中でも、次の名前のファイルやフォルダは読めず、一覧や検索からも黙って外れます。ChatGPT や Muse からはまったく見えません。直接読もうとすると `sensitive path excluded from read scope` が返ります。大文字と小文字は区別しません。
+`list_folder` と `list_folder_page` は、出力上限やページ分けを適用する前に、調べた範囲で表示できなかった項目の数を `omitted_entries` に返します。
 
 - `.` で始まる名前（隠し名）、空白か `.` で終わる名前、`:` や制御文字を含む名前、`CON`・`NUL`・`COM1`・`LPT1` などのデバイス名。
 - この名前のフォルダやファイル：`state`、`runtime`、`logs`、`temp`、`venv`、`node_modules`、`__pycache__`、`secret`、`secrets`、`token`、`tokens`、`credential`、`credentials`、`private_key`、`private-key`、`private_keys`、`private-keys`、`auth.json`、`oauth.json`、`api-keys.json`、`apikeys.json`、`id_rsa`、`id_ed25519`、`id_dsa`、`id_ecdsa`、Sora Commander 自身の journal ファイル。
@@ -146,6 +152,8 @@ read: C:\Work\ReferenceNotes
 - 次で終わる名前：`.user.txt`、`.env`、`.pem`、`.key`、`.pfx`、`.p12`、`.jks`、`.keystore`、`.kdbx`、`.sqlite`、`.sqlite3`、`.db`、`.db3`、`.wal`、`.shm`、`.journal`、`.zip`、`.7z`、`.rar`、`.tar`、`.tgz`、`.gz`、`.bak`、`.backup`。
 
 安全側に倒した決まりなので、`src/state` のような普通のフォルダも見えなくなることがあります。必要なら、そのファイルは自分で開いてください。
+
+**OneDrive のオンライン専用ファイル。** OneDrive がクラウドにだけ置いているファイルも、ほかのファイルと同じように一覧に出て、名前でも見つかります。コード検索は内容を読みません。`read_many_text_files` と `compare_text_files` は、オンライン専用ファイルが入力に1件でもあればリクエスト全体を拒否します。`read_text_file` で 1 つだけ読むと、エクスプローラーで開いたときと同じようにダウンロードされます。検索に含めたいファイルは、一度開くか、「このデバイス上に常に保持する」を選んでください。
 
 リンク経由の設定ファイルや、不正なUTF-8も拒否します。ファイルの上限は64 KiBです。この一覧はファイル操作ツールとコマンドの作業ディレクトリの範囲を指定するもので、明示的に承認したコマンドをサンドボックスで隔離するものではありません。
 
@@ -156,6 +164,18 @@ read: C:\Work\ReferenceNotes
 ### 承認窓の言語を選ぶ（任意）
 
 承認窓は英語か日本語で表示します。何も設定しなければ、Windowsの表示言語に合わせます。日本語のWindowsなら日本語、それ以外の言語なら英語です。自分で選ぶ場合は、`%USERPROFILE%\.config\sora-commander\language.txt`を作り、`en`か`ja`を1行だけ書いてください（小文字。`#`で始まる行は無視します）。それ以外の内容だと、`[HOLD]`を表示して起動を止めます。言語は起動時に読み込むので、変更したらBrokerとクライアントの両方を再起動してください。Brokerは起動時に`[INFO] Window language: ...`と表示します。言語で変わるのは窓の文字だけです。確認や承認の内容は変わりません。
+
+### DEV書き込みツールを有効にする（任意）
+
+使う場合だけ `%USERPROFILE%\.config\sora-commander\dev-write-tools.txt` を通常ファイルとして作り、小文字の `on` だけを書きます。
+改行なし、LF、CRLF を受け付けます。空白、BOM、コメント、`off` は不正です。
+ファイルがなければオフになります。不正なファイルがあると `[HOLD] dev-write-tools.txt: ...` を表示して起動を止めます。
+
+Broker とクライアントを再起動します。通常モードでは Host を再起動します。その後 ChatGPT でツールを再読み込みします。
+Broker の窓には `[INFO] DEV write tools: on` または `[INFO] DEV write tools: off` が表示されます。
+テキスト編集・作成 pilot は別の設定です。
+
+`create_directory` はフォルダ1つを作成し、`create_file` はテキストファイルを作成し、`move_file` はファイルを移動・改名し、`request_source_patch_dev` はソース中の文字列を置換します。`send_input` は通常モードで承認済みのDEV対話セッションに数値式を1行送ります。対応する操作では使うたびにOwnerの承認窓が開きます。
 
 ### 作業の型を登録する（任意）
 
@@ -185,11 +205,14 @@ ChatGPTは`list_tasks`で一覧を見て、`run_task`で起動します。**起�
 
 **Brokerモード（推奨・標準）。** ジョブと承認窓は別プロセスにあり、トンネルを再起動しても残ります。`tools\start-broker-mode.cmd`を1回ダブルクリックします。Brokerを別の窓で起動し、Brokerのパイプが存在するまで待ってから、トンネルを起動します。これはパイプの存在確認であり、Brokerの応答確認ではありません。両方の窓を開いたままにしてください。停止するときは、先にトンネルの窓で`Ctrl+C`、次にBrokerの窓で`Ctrl+C`を押します。
 
-トンネルだけを再起動するには、Brokerを動かしたまま`tools\start-sora-commander-broker-dev.cmd`を使います。
+別々の窓で手動起動するときは、先に `tools\start-broker.cmd` を使います。
+Broker の準備ができたら `tools\start-broker-tunnel.cmd` でトンネルを起動します。
+トンネルだけの再起動にもこのランチャーを使います。`tunnel-client` に
+`mcp-broker-client.cmd` をコマンドラインで渡します。
 
 Windowsにサインインしたままにしてください。画面がロックされていると承認窓を開けません。
 
-**補足の通常モード：** `tools\start-sora-commander-local.cmd`を1回ダブルクリックし、その窓を開いたままにします。このモードにはBrokerモードの再起動後の二重実行防止がありません。結果不明のコマンドをやり直すためにモードを変えないでください。例のYAMLはBrokerクライアントを使っています。通常モードでは、起動前にcommandを同じフォルダの`next-development.cmd`へ変更する必要があります。
+**補足の通常モード：** `tools\start-usual-mode.cmd`を1回ダブルクリックし、その窓を開いたままにします。このモードにはBrokerモードの再起動後の二重実行防止がありません。結果不明のコマンドをやり直すためにモードを変えないでください。例のYAMLはBrokerクライアントを使っています。通常モードでは、起動前にcommandを同じフォルダの`mcp-direct.cmd`へ変更する必要があります。
 
 ### サインイン時に起動する（任意）
 
@@ -205,8 +228,10 @@ Broker の準備ができたら ChatGPT 用トンネルを1回起動します。
 読み取れます。承認が必要な操作では、引き続き PC 上で応答してください。
 
 ログは `%LOCALAPPDATA%\SoraCommanderNext\broker-autostart.log` にあります。
-起動時に 1 MiB を超えていれば `broker-autostart.log.1` に移します。
-以下のコマンドでタスクの確認、即時起動、停止ができます。
+Broker の標準出力と標準エラーを合わせて最大200行、1行あたり500文字まで記録します。
+トンネルが先に終了した場合は終了コードを記録します。トンネルの出力は破棄します。
+共有前に私的な情報を消してください。起動時にログが 1 MiB を超えていれば
+`broker-autostart.log.1` に移します。確認、手動での起動、停止には以下を使います。
 
 ```cmd
 schtasks /Query /TN "SoraCommander Broker mode"
@@ -217,6 +242,21 @@ schtasks /End /TN "SoraCommander Broker mode"
 タスクを削除するには `tools\uninstall-broker-autostart.cmd` を実行します。
 タスクが動いていれば先に止めるので、実行中のジョブがないか確かめてから解除してください。
 
+## v0.6 でランチャー名を変更
+
+| 旧名 | 新名 |
+| --- | --- |
+| `start-owner-broker-dev.cmd` | `start-broker.cmd` |
+| `start-sora-commander-broker-dev.cmd` | `start-broker-tunnel.cmd` |
+| `next-development-broker-client.cmd` | `mcp-broker-client.cmd` |
+| `next-development.cmd` | `mcp-direct.cmd` |
+| `start-sora-commander-local.cmd` | `start-usual-mode.cmd` |
+
+ランチャーは `tools\` にあり、旧名は v0.7 まで使えます。
+Broker モードでは起動時に新名のクライアントを指定します。通常モードで新名へ切り替えるときは、
+YAML の `command` に `tools/mcp-direct.cmd` の絶対パスを指定します。
+登録済みの Broker ログオンタスクは Python ヘルパーを呼ぶため、登録し直す必要はありません。
+
 ## 6. ChatGPTに接続する
 
 利用条件、ワークスペースの権限、接続方法は、OpenAI公式ヘルプの最新の[Connecting custom MCP servers in ChatGPT](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)（[日本語](https://help.openai.com/ja-jp/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)）に従ってください。案内に従って自分のSecure MCP Tunnelを使います。画面名や手順は変わることがあります。接続後、新しいチャットで`ping`、`status`、`list_sessions`、`tool_catalog`を依頼してください。
@@ -225,8 +265,9 @@ schtasks /End /TN "SoraCommander Broker mode"
 
 | 構成 | 登録ツール数 |
 | --- | ---: |
-| ChatGPT（手順5のとおり起動。Broker モードでも通常モードでも、編集・作成 pilot はオン） | 54 |
-| 編集・作成 pilot をオフにした ChatGPT 用 Host | 48 |
+| ChatGPT（手順5のとおり起動。Broker モードでも通常モードでも、編集・作成 pilot はオン） | 49 |
+| DEV書き込みツールをオンにした ChatGPT 用 Host | 48（編集・作成 pilot もオンなら54） |
+| DEV 書き込みツールと編集・作成 pilot を両方オフにした ChatGPT 用 Host | 43 |
 | 読み取り専用 Muse ブリッジ | 36（`--inbox` 付きは 37） |
 
 過去の変更点にあるツール数は、各リリース時点の数です。
@@ -235,7 +276,7 @@ ChatGPTのファイル操作ツールは、設定した許可フォルダに届�
 
 ## 問題が起きたとき
 
-ChatGPTが承認は未決定で終わったと伝えた場合、何も実行されていません。準備ができたら改めて依頼してください。
+承認が未決定で終わった場合は、その承認の対象は実行されていません。同じ操作を依頼するには、Owner の新しい明示指示が必要です。
 
 `.venv\Scripts\python.exe tools\scn_doctor.py`で、修正先の案内付きの読取り専用セットアップ確認を実行できます。
 何も起動せず、トンネルのキーやYAMLの内容も読みません。`--lang en`または`--lang ja`で、この診断結果の言語を選べます。承認窓の言語は`language.txt`で決まります。
@@ -247,8 +288,8 @@ WARNは情報であり、HOLDがある場合は終了コード1になります�
 |---|---|---|
 | `A tunnel is already running or port 8080 is in use` | トンネルが動作中、または他のプログラムがポートを使用中 | 2つ目を起動しないでください |
 | `A tunnel is running. Stop it first` | Brokerをトンネルより先に起動する必要がある | トンネルを止め、上記の順に起動してください |
-| `A Broker is already running` | Broker モードがすでに動いている | `tools\start-sora-commander-broker-dev.cmd` でトンネルだけを起動してください |
-| `The Broker pipe was not ready within 30 seconds` | Broker が起動しなかった | Broker の窓を読んで原因を直し、もう一度起動してください |
+| `A Broker is already running` | Broker モードがすでに動いている | `tools\start-broker-tunnel.cmd` でトンネルだけを起動してください |
+| `The Broker pipe was not ready within 30 seconds` | 起動時に Broker のパイプを時間内に確認できなかった | Broker の窓を読んで原因を直し、もう一度起動してください |
 | `Could not check ...`（終了コード2） | 起動前の確認に Windows が答えなかったので、何も起動していない | 時間をおいてやり直してください。続くときはその行を報告してください |
 | `Required local component is missing`（終了コード2） | ランチャーが使うファイルがない（多くは`.venv`） | `tools\setup.cmd` を実行するか、checkout の中身を確かめてください |
 | `GIT_NOT_INSTALLED` | Git for Windows が `C:\Program Files\Git` にない | 既定のフォルダに入れてください |
@@ -352,7 +393,9 @@ Ownerが`%USERPROFILE%\.config\sora-commander\ogf-bridge.json`を作らなけれ
 
 ## 承認が未決定で終わったとき（v0.1.7）
 
-2026-11-13にBrokerモードでChatGPTを通じた実際の窓を確認しました。確認済みはコマンド窓（Approve、Reject、X、無回答）と`create_file`（X、Approve）です。他の経路はテストでは同じ動作ですが、実際の窓では未確認です。未確認の範囲は`create_file`と他のDEVファイルツールの無回答、DEV `send_input`、対話型の2つ目の窓、テキスト編集・作成pilot、`run_task`、`ogf_cue`です。このDEV確認は本番受入を意味しません。
+ChatGPT の Broker モードで、2026-11-13 にコマンド窓（Approve、Reject、X、無回答）と `create_file`（X、Approve）を確認しました。11-18 には DEV ファイルツール、作成 pilot、`run_task` の無回答と、`create_directory`、編集 pilot、`run_task` の X を確認しました。11-19 には Broker を使わない Muse の DEV Host で、対話実行の2番目の窓の無回答・Reject と、`send_input` の X・無回答・Approve を確認しました。限定的な DEV 確認です。`ogf_cue` の実窓は未確認です。
+
+`reason=CLOSED` は「Owner が決めずに窓を閉じた」、`reason=EXPIRED` は「期限まで回答がなかった」と伝えます。
 
 | Ownerの操作 | ChatGPTが受け取る結果 | 意味 |
 |---|---|---|
@@ -368,13 +411,16 @@ Ownerが`%USERPROFILE%\.config\sora-commander\ogf-bridge.json`を作らなけれ
 
 ## テストを実行する
 
+一部のテストで使うため、チェックアウト直下に通常のフォルダ `temp` がなければ作成します。
+
 ```powershell
+if (-not (Test-Path -LiteralPath temp)) { mkdir temp }
 $env:PYTHONPATH = "src;."
 $m = Get-ChildItem tests\test_*.py | ForEach-Object { "tests." + $_.BaseName }
-.venv\Scripts\python.exe tests\run_with_real_dialog_guard.py @m
+.venv\Scripts\python.exe -B tests\run_with_real_dialog_guard.py @m
 ```
 
-公開版に含まれるのは、開発用テストの一部です。このコマンドは手元のコピーに含まれるテストモジュールを、実際の承認窓を開こうとすると失敗させるguard付きで実行します。開発用の全回帰テストではありません。トンネルは不要で、数分かかります。パスに`temp`というフォルダや、ドットで始まるフォルダを含めないでください。一部のテストがスキップされることがあります。
+公開版に含まれるのは、開発用テストの一部です。このコマンドは手元のコピーに含まれるテストモジュールを、実際の承認窓を開こうとすると失敗させるguard付きで実行します。Windows の GitHub ワークフローでも、プルリクエストと手動実行で同じ範囲を検証します。トンネルは不要で、数分かかります。チェックアウト自体のパスに `temp` という名前やドットで始まるフォルダ名を含めないでください。一部のテストがスキップされることがあります。
 
 ※ 実画面のスクリーンショット付きで一歩ずつ進めたい方向けに、有料の初心者向け実践ガイドもあります：
 https://note.com/kurojack_jp/n/nab0d17f9e491

@@ -298,8 +298,7 @@ class ScaffoldTests(unittest.TestCase):
             "path_info", "read_text_lines", "read_many_text_files",
             "compare_text_files", "read_text_chunk", "sha256_file",
             "preview_source_create", "preview_source_patch", "tool_catalog", "activity",
-                "create_directory", "create_file", "move_file", "request_source_patch_dev",
-                "list_processes", "get_config", "send_input",
+                "list_processes", "get_config",
         })
         self.assertFalse(set(registered) & {
             "approve", "reject", "approve_local", "reject_local",

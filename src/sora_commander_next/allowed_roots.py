@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import stat
 
-from .file_reads import _read_name_denied
+from .file_reads import _is_redirecting_link, _read_name_denied
 
 MAX_ROOTS = 16
 MAX_CONFIG_BYTES = 65536
@@ -28,11 +28,18 @@ class AllowedRootsError(ValueError):
         super().__init__(f"allowed-roots line {line}: {reason}")
 
 
+def _linked_configuration(info):
+    return (stat.S_ISLNK(info.st_mode)
+            or bool(getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
+
+
 def _plain_path(path, *, directory):
     # Inspect the original spelling before resolve can hide a junction.
     for part in (*reversed(path.parents), path):
         info = part.lstat()
-        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        linked = (_is_redirecting_link(info, ValueError) if directory
+                  else _linked_configuration(info))
+        if linked:
             raise ValueError("linked path")
     if not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
         raise ValueError("wrong object type")
@@ -175,7 +182,7 @@ def startup_allowed_roots(repo_root, profile, environ=None):
                     info = parent.lstat()
                 except FileNotFoundError:
                     break
-                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                if _linked_configuration(info):
                     raise AllowedRootsError(0, "linked configuration path")
             return AllowedRoots((_validate_root(str(base), 0, home, blocked, contained),))
         _plain_path(config, directory=False)

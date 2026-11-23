@@ -4,8 +4,8 @@ config_version: 1
 control_plane:
   base_url: https://api.openai.com
   tunnel_id: REPLACE_WITH_YOUR_TUNNEL_ID
-  # Replace YOUR_NAME with your Windows user folder. Forward slashes are required.
-  api_key: file:C:/Users/YOUR_NAME/.config/tunnel-client/sora-next.key
+  # Use the absolute path to sora-next.key in your Windows profile. Use forward slashes.
+  api_key: file:REPLACE_WITH_ABSOLUTE_KEY_PATH
 health:
   listen_addr: 127.0.0.1:8080
 admin_ui:
@@ -16,5 +16,5 @@ log:
 mcp:
   commands:
     # Replace with the full path to your checkout. Forward slashes are required.
-    # The checkout path must not contain spaces. Non-ASCII paths are unverified.
-    - command: "cmd.exe /d /c C:/SoraCommander/tools/next-development-broker-client.cmd"
+    # Use a checkout path accepted by setup. Actual starts from non-ASCII paths are unverified.
+    - command: "cmd.exe /d /c C:/SoraCommander/tools/mcp-broker-client.cmd"

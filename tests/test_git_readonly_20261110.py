@@ -3,6 +3,7 @@ import asyncio
 from hashlib import sha256
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from types import SimpleNamespace
 import unittest
@@ -20,41 +21,62 @@ NAMES = ("git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check")
 
 
 class GitReadTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = Path(cls.enterClassContext(inherited_test_temp())).resolve()
+        # Git writes its objects read-only; make them removable before the
+        # fixture's own verified cleanup runs (cleanups run last-in first-out).
+        cls.addClassCleanup(cls._writable, cls.fixture)
+        cls.template = cls.fixture / "template"
+        cls.template.mkdir()
+        cls.exe = git.fixed_git()
+        env = dict(USERPROFILE=str(cls.fixture), LOCALAPPDATA=str(cls.fixture),
+                   HOME=str(cls.fixture))
+        with patch.dict(os.environ, env):
+            cls._command(cls.exe, cls.template, "init", "-b", "trial")
+            cls._command(cls.exe, cls.template, "config", "user.name", "Synthetic Author")
+            cls._command(cls.exe, cls.template, "config", "user.email", "synthetic@example.invalid")
+            (cls.template / "hello.txt").write_text("initial\n", encoding="utf-8")
+            (cls.template / ".env").write_text("SYNTHETIC_ENV_SECRET\n", encoding="utf-8")
+            (cls.template / "key.pem").write_text("SYNTHETIC_KEY_SECRET\n", encoding="utf-8")
+            cls._command(cls.exe, cls.template, "add", "--", "hello.txt", ".env", "key.pem")
+            cls._command(cls.exe, cls.template, "commit", "-m", "synthetic initial")
+            cls._command(cls.exe, cls.template, "config", "branch.trial.remote", "origin")
+            cls._command(cls.exe, cls.template, "config", "branch.trial.merge", "refs/heads/trial")
+            cls._command(cls.exe, cls.template, "config", "remote.origin.url",
+                         "https://example.invalid/synthetic.git")
+
     def setUp(self):
         admission = self.enterContext(canonical_fixture_admission())
         self.enterContext(patch.object(git, "_check", side_effect=admission))
-        self.root = Path(self.enterContext(inherited_test_temp())).resolve()
-        # Git writes its objects read-only; make them removable before the
-        # fixture's own verified cleanup runs (cleanups run last-in first-out).
-        self.addCleanup(self._writable)
+        self.root = self.fixture / self._testMethodName
         self.repo = self.root / "repo"
-        self.repo.mkdir()
+        shutil.copytree(self.template, self.repo)
         self.roots = (str(self.repo),)
-        self.exe = git.fixed_git()
-        self.command("init", "-b", "trial")
-        self.command("config", "user.name", "Synthetic Author")
-        self.command("config", "user.email", "synthetic@example.invalid")
-        (self.repo / "hello.txt").write_text("initial\n", encoding="utf-8")
-        (self.repo / ".env").write_text("SYNTHETIC_ENV_SECRET\n", encoding="utf-8")
-        (self.repo / "key.pem").write_text("SYNTHETIC_KEY_SECRET\n", encoding="utf-8")
-        self.command("add", "--", "hello.txt", ".env", "key.pem")
-        self.command("commit", "-m", "synthetic initial")
-        self.command("config", "branch.trial.remote", "origin")
-        self.command("config", "branch.trial.merge", "refs/heads/trial")
-        self.command("config", "remote.origin.url", "https://example.invalid/synthetic.git")
+        self.enterContext(patch.dict(os.environ, USERPROFILE=str(self.root),
+                                     LOCALAPPDATA=str(self.root), HOME=str(self.root)))
+        # The copy has distinct file identities. Refresh the fixture index before
+        # asserting that the real read-only commands leave it byte-for-byte intact.
+        self.command("update-index", "--refresh")
 
-    def _writable(self):
-        for item in self.root.rglob("*"):
+    @staticmethod
+    def _writable(root):
+        for item in root.rglob("*"):
             if item.is_file() and not item.is_symlink():
                 os.chmod(item, 0o666)
 
     def command(self, *args):
-        result = subprocess.run([str(self.exe), *git.OPTIONS, *args],
-                                cwd=self.repo, env=git.safe_env(self.exe),
+        return self._command(self.exe, self.repo, *args)
+
+    @staticmethod
+    def _command(exe, repo, *args):
+        result = subprocess.run([str(exe), *git.OPTIONS, *args],
+                                cwd=repo, env=git.safe_env(exe),
                                 shell=False, capture_output=True, timeout=15,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if result.returncode:
-            self.fail("synthetic setup Git failed: " + result.stderr.decode("utf-8", "replace"))
+            raise AssertionError("synthetic setup Git failed: "
+                                 + result.stderr.decode("utf-8", "replace"))
         return result.stdout
 
     def hashes(self):

@@ -1,4 +1,4 @@
-"""Update an idle public Windows checkout using its official main upstream.
+"""Update an idle public Windows checkout to its latest official release tag.
 
 --check fetches tags and updates remote-tracking refs, then stops before merging.
 Exit codes are 0 for OK or updated, 2 for HOLD, and 6 for an unsupported checkout path.
@@ -52,6 +52,11 @@ RELATIVE_MARKERS = re.compile(
     r"|sora_commander_next(?:\.\w+)*)"
     r"(?![\w.-])"
 )
+LAUNCHER_MARKERS = re.compile(
+    r"(?<![\w.-])(?:start-(?:broker(?:-tunnel)?|usual-mode|owner-broker-dev"
+    r"|sora-commander-(?:broker-dev|local))|mcp-(?:broker-client|direct)"
+    r"|next-development(?:-broker-client)?)\.cmd(?![\w.-])"
+)
 LOGON_TASKS = (BROKER_TASK, MUSE_TASK)
 STOP_TASKS = tuple(f'schtasks /End /TN "{name}"' for name in LOGON_TASKS)
 PACKAGE_CHECK = """
@@ -83,7 +88,23 @@ def run(command, root, *, env=None, timeout=30, encoding="utf-8"):
     )
 
 
+def fixed_git():
+    # Imported on first use so the checkout path check in main() runs first.
+    from sora_commander_next.git_readonly import fixed_git as resolve
+    return resolve()
+
+
 def git(root, *args, allow_one=False, failure=None):
+    from sora_commander_next.git_readonly import ReadBoundaryError
+
+    try:
+        executable = fixed_git()
+    except ReadBoundaryError as error:
+        reason = str(error)
+        if reason == "GIT_NOT_INSTALLED":
+            raise UpdateHold("Install Git for Windows in its default folder.") from error
+        raise UpdateHold(f"Git for Windows installation refused ({reason}).") from error
+
     env = {key: value for key, value in os.environ.items()
            if not key.upper().startswith("GIT_")}
     env.update(
@@ -91,7 +112,7 @@ def git(root, *args, allow_one=False, failure=None):
         GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GIT_ASKPASS="",
         SSH_ASKPASS="", GCM_INTERACTIVE="Never",
     )
-    result = run(["git", *GIT_OPTIONS, *args], root, env=env, timeout=120)
+    result = run([str(executable), *GIT_OPTIONS, *args], root, env=env, timeout=120)
     if result.returncode == 1 and allow_one:
         return None
     if result.returncode:
@@ -178,6 +199,7 @@ def _process_matches(root, rows, own_pids):
             # entry point is enough to HOLD, even for a different checkout.
             if (name == "tunnel-client.exe"
                     or prefix in text and any(marker in text for marker in RUNTIME_MARKERS)
+                    or name == "cmd.exe" and LAUNCHER_MARKERS.search(command)
                     or name in PROCESS_NAMES and RELATIVE_MARKERS.search(command)
                     or name in PROCESS_NAMES and not command
                     and (not path or prefix in path)):
@@ -277,8 +299,7 @@ def require_idle(root):
 
 
 def release_tags(root):
-    output = git(root, "tag", "--merged", "refs/remotes/origin/main",
-                 "--format=%(objecttype) %(refname:strip=2)")
+    output = git(root, "tag", "--format=%(objecttype) %(refname:strip=2)")
     tags = {}
     for row in output.splitlines():
         kind, _, tag = row.partition(" ")
@@ -286,7 +307,7 @@ def release_tags(root):
         if kind == "tag" and match:
             tags[tag] = tuple(map(int, match.groups()))
     if not tags:
-        raise UpdateHold("No annotated vX.Y.Z tag is reachable from origin/main.")
+        raise UpdateHold("No annotated vX.Y.Z release tag was found.")
     return sorted(tags, key=tags.__getitem__)
 
 
@@ -315,21 +336,31 @@ def main(argv=None, *, root=ROOT):
         git(root, "fetch", "--tags", "--no-auto-maintenance", "origin",
             failure="Fetch from the official HTTPS upstream failed.")
         print("[DONE] Fetched tags and updated remote-tracking refs.")
-        current = git(root, "describe", "--tags", "--abbrev=0", "HEAD")
         tags = release_tags(root)
         latest = tags[-1]
-        print(f"[OK] Current version: {current}; latest release: {latest}.")
+        tag_ref = f"refs/tags/{latest}"
+        tag_object = git(root, "rev-parse", "--verify", tag_ref)
+        advertised = git(root, "ls-remote", "--exit-code", "--refs", "origin", tag_ref,
+                         failure=f"Could not verify release tag {latest} on the official HTTPS origin.")
+        if advertised != f"{tag_object}\t{tag_ref}":
+            raise UpdateHold(f"Release tag {latest} differs from the official HTTPS origin.")
+        target = git(root, "rev-parse", "--verify", f"{tag_object}^{{commit}}")
+        if git(root, "merge-base", "--is-ancestor", target, "refs/remotes/origin/main",
+               allow_one=True) is None:
+            raise UpdateHold(f"Release tag {latest} is not reachable from origin/main.")
+
+        print(f"[OK] Latest release: {latest}.")
         head = git(root, "rev-parse", "HEAD")
-        upstream = git(root, "rev-parse", "refs/remotes/origin/main")
-        if head == upstream:
-            print("[OK] Already current.")
+        if head == target or git(root, "merge-base", "--is-ancestor", target, head,
+                                 allow_one=True) is not None:
+            print(f"[OK] Already current. No update needed for {latest}.")
             if not args.check:
                 check_packages(root)
             return 0
 
-        if git(root, "merge-base", "--is-ancestor", head, upstream, allow_one=True) is None:
-            raise UpdateHold("local commits on main; update by hand")
-        new_tags = set(git(root, "tag", "--merged", "refs/remotes/origin/main",
+        if git(root, "merge-base", "--is-ancestor", head, target, allow_one=True) is None:
+            raise UpdateHold(f"Local main cannot fast-forward to {latest}. Update by hand.")
+        new_tags = set(git(root, "tag", "--merged", target,
                            "--no-merged", "HEAD").splitlines())
         changes = ", ".join(tag for tag in tags if tag in new_tags) or "(none)"
         print(f"[OK] Incoming release tags: {changes}.")
@@ -341,11 +372,12 @@ def main(argv=None, *, root=ROOT):
         # Fetch can take time. Recheck local edits and process state before merging.
         check_checkout(root)
         require_idle(root)
-        git(root, "merge", "--ff-only", "--no-overwrite-ignore", "origin/main",
+        git(root, "merge", "--ff-only", "--no-overwrite-ignore", target,
             failure="Fast-forward failed. Inspect Git status before continuing.")
-        print("[DONE] Fast-forwarded main.")
+        print(f"[DONE] Fast-forwarded main to release {latest}.")
         check_packages(root)
-        print(r"[TODO] Restart the Broker with tools\start-broker-mode.cmd or its logon task.")
+        print(r"[TODO] Restart Broker mode with tools\start-broker-mode.cmd or its logon task.")
+        print(r"[TODO] If you use usual mode, restart it with tools\start-usual-mode.cmd.")
         print(r"[TODO] Restart the Muse bridge with its launcher or logon task.")
         print("[TODO] Refresh tools in ChatGPT and Muse.")
         print("[TODO] Read the release notes for action needed items.")

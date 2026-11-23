@@ -27,15 +27,15 @@ after changing it.
 
 **It saves the usage of your other tools.** The ChatGPT chat you already use does the reading, running and checking, so that work does not use up the limits of a separate coding agent. ChatGPT's own message limits still apply.
 
-It also works in an ordinary chat in Instant mode — no separate app or mode to switch into. From December, ChatGPT and Codex share usage quotas on Plus/Pro/Business plans, but OpenAI says chat in Instant mode does not consume quota, so working here does not draw on your Work quota. That statement covers chat, not tool calls, so it is not a promise that every tool call is free.
-
 ![On ChatGPT Plus with the Codex 5-hour limit at 0%, ChatGPT asks Sora Commander to create a file, the Owner approves it on the PC, and the file appears](docs/demo-5h-limit.gif)
+
+The demo uses `create_file`, which needs `dev-write-tools.txt` set to `on` from v0.6. With the edit/create pilot, `request_text_create` also shows the full content in the approval window.
 
 *26 seconds, Japanese captions. On ChatGPT Plus with the Codex 5-hour limit at 0%, ChatGPT asks Sora Commander to create a file, you approve it in the window on your PC, and the file appears in Explorer. Recorded on the author's PC on 2026-11-21. It shows that this request still ran, not that tool calls never count toward any limit.*
 
 Sora Commander is an MCP server for Windows. It connects to ChatGPT through OpenAI's Secure MCP Tunnel. Commands that are not plainly safe open an approval window on your PC, and they run only if you approve them. **So you need to be at the PC to approve them.** Reading files and checking results need no window.
 
-> **v0.5 developer preview. Not accepted for production use.**
+> **v0.6 developer preview. Not accepted for production use.**
 > In addition to the author's normal environment, a fresh Windows Sandbox trial on 2026-11-09 (administrator account) reached ChatGPT file reads and an Owner-approved command with exit code 0. Python and Git were borrowed read-only from the host. A second fresh Sandbox trial on 2026-11-21 installed Python 3.13 and Git from their official installers, without PowerShell 7, and `tools\setup.cmd` and the launch checks passed, also from a Japanese checkout path; it did not start a tunnel. These limited trials are not production acceptance. This software lets an AI operate your computer. Read each approval window before you click, and use it only if you can judge what a command does.
 
 日本語の説明は[下](#日本語)にあります。
@@ -48,8 +48,7 @@ whether another account's Muse can join its own tailnet the same way is not yet
 confirmed. Muse is a Meta product; this project is not affiliated with or
 endorsed by Meta. As of November 2026, ChatGPT and Muse plan terms can change.
 The bridge code also contains an unfinished exec mode for development. It is
-not supported for use. It does not start unless you list a node under `exec`
-in the peers file, and every command it receives still opens the approval window.
+unsupported for general use. Every command it receives still opens the approval window.
 
 ## What it does
 
@@ -65,17 +64,31 @@ in the peers file, and every command it receives still opens the approval window
 
 | Configuration | Registered tools |
 | --- | ---: |
-| ChatGPT, started with the included launchers (Broker mode or usual mode; the edit/create pilot is on) | 54 |
-| ChatGPT Host with the edit/create pilot turned off | 48 |
+| ChatGPT, started with the included launchers (Broker mode or usual mode; the edit/create pilot is on) | 49 |
+| ChatGPT Host with DEV write tools on | 48 (54 with the edit/create pilot) |
+| ChatGPT Host with both opt-ins off | 43 |
 | Muse read-only bridge | 36, or 37 with `--inbox` |
 
 Older sections give the tool count at the release they describe.
+
+## New in v0.6.0
+
+New launcher names, release-tag updates and clearer file listings.
+
+- **Updating from v0.5.0.** Follow [Updating](docs/INSTALL.md#updating) to reach the v0.6.0 tag. See [Launcher names](docs/INSTALL.md#launcher-names-changed-in-v06) for the new commands.
+- **DEV write tools are off by default.** Enable them only if you need them. The edit/create pilot has its own setting. [DEV write tools](docs/INSTALL.md#enable-the-dev-write-tools-optional)
+- **Logs.** The Broker logon task records bounded Broker output. The Muse logon task rotates its bridge log while running.
+- **OneDrive.** Listings and filename searches include online-only files. Bulk content reads do not download them.
+- **Folder listings.** `list_folder` and `list_folder_page` report `omitted_entries` before applying the output limit or pagination.
+- **Muse.** Concurrent identity lookups for the same address reuse a cached result when available. The digest reports `CHECKOUT_NOT_IN_READ_ROOTS` if the checkout is outside the read roots.
+- **Shorter tool help.** Shared approval rules are in the server instructions. When the Owner closes a review window, report that it closed without a decision.
+- **Windows tests.** The public workflow runs on pull requests and on manual dispatch.
 
 ## New in v0.5.0
 
 Helpers for setup, the key and updates, and no PowerShell in the start path.
 
-- **Updating from v0.4.0:** v0.4.0 has no update helper, so update once by hand as described in [Updating](docs/INSTALL.md#updating). Later updates use `tools\update.cmd`.
+- **Updating from v0.4.0:** This release introduced `tools\update.cmd`. See [Updating](docs/INSTALL.md#updating) for the current tag-pinned instructions.
 - **`tools\setup.cmd`** creates `.venv`, installs the packages, copies the example tunnel settings when they are missing, runs the doctor and lists what is left. `--check` only reports.
 - **`tools\set-tunnel-key.cmd`** stores the tunnel key with hidden input in a file only your Windows user can open. `--check` checks its form without showing it. `tools\Set-NextTunnelKey.ps1` still works and calls it.
 - **`tools\update.cmd`** previews (`--check`) and fast-forwards a clean `main`.
@@ -150,9 +163,9 @@ A hardening release; please update.
 
 ## New in v0.1.7
 
-- Approval windows now distinguish Reject (`DENIED`) from no decision: X gives `TIMED_OUT`, `reason=CLOSED`; no answer in time gives `TIMED_OUT`, `reason=EXPIRED`. **X changed meaning: before this version, closing the window counted as a reject.** No decision means nothing ran or was written; ChatGPT reports and waits for your next instruction, without resubmitting or asking for the window again. A no-answer result is not a refusal or proof that you were away. Time limits are unchanged. Live-checked on 2026-11-13 with real windows through ChatGPT in Broker mode: command windows (Approve, Reject, X, no answer) and `create_file` (X, Approve). Other paths behave the same way in tests but have not been checked with real windows: no answer for `create_file` and the other DEV file tools, DEV `send_input`, the interactive second window, the text edit/create pilot, `run_task` and `ogf_cue`. These DEV checks do not establish production acceptance. See the INSTALL guide for scope and uncertain outcomes.
+- Approval windows now distinguish Reject (`DENIED`) from no decision: X gives `TIMED_OUT`, `reason=CLOSED`; no answer in time gives `TIMED_OUT`, `reason=EXPIRED`. **X changed meaning: before this version, closing the window counted as a reject.** No decision means nothing ran or was written; ChatGPT reports and waits for your next instruction, without resubmitting or asking for the window again. A no-answer result is not a refusal or proof that you were away. Time limits are unchanged. Live-checked on 2026-11-13 with real windows through ChatGPT in Broker mode: command windows (Approve, Reject, X, no answer) and `create_file` (X, Approve). Other paths had synthetic coverage only at that point: no answer for `create_file` and the other DEV file tools, DEV `send_input`, the interactive second window, the text edit/create pilot, `run_task` and `ogf_cue`. These DEV checks do not establish production acceptance. See the INSTALL guide for scope and uncertain outcomes.
 - `activity` answers which operations and IDs are known in the current run, without an approval window. It shows only IDs, states and times.
-- **After updating, restart the Broker and its client, then refresh the tools in ChatGPT.** The DEV tool list with the optional edit/create pilot grew to 54 tools, and the tool help changed; the visible count depends on the Host configuration.
+- **After updating, restart the Broker and its client, then refresh the tools in ChatGPT.** From v0.6 the Host shows 43 tools by default, or 49 with the edit/create pilot. The five DEV write tools are an Owner opt-in.
 
 ## New in v0.1.5
 
@@ -240,7 +253,7 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 > - 作者は 2026 年 11 月時点で、**Plus の開発者モード**で Sora Commander を使い、承認付きコマンドも実行しています。
 > - このヘルプページに Plus の記載はありません。この環境で使えるかどうかはいつでも変わり得ます。
 > - 読み取り専用の Muse ブリッジも使えます。Tailscale と Python のセットアップが必要で、ChatGPT のプランは不要です。
-> - ブリッジのコードには、開発中の exec モードも入っています。使うことはサポートしていません。peers ファイルの`exec`にノードを書かない限り起動せず、受け取ったコマンドはすべて承認窓を出します。
+> - ブリッジのコードには、開発中の exec モードも入っています。一般利用はサポート対象外です。受け取ったコマンドは、すべて承認窓を出します。
 
 **いつもの ChatGPT のチャットで頼むだけで、ChatGPT があなたの Windows PC で作業します。1 つずつ、画面の窓で承認します。**
 
@@ -258,9 +271,9 @@ Sora Commander is an independent project. It is not made, endorsed or supported 
 
 **他のツールの使用量を節約できます。** 読む、実行する、確かめるといった作業を、普段使っている ChatGPT のチャットが受け持つので、別のコーディング AI の使用量の上限を使わずに済みます。ChatGPT 自体のメッセージの上限はあります。
 
-いつものチャット（Instant モードを含む）でそのまま使えます。12月から Plus/Pro/Business では ChatGPT と Codex で利用枠が共有されますが、OpenAI によれば Instant モードのチャットは枠を消費しないため、こちらの作業で Work の枠を使わずに済みます。ただしこの説明はチャットについてのもので、ツール呼び出しの扱いまでは書かれていないので、無料を断定するものではありません。
-
 ![ChatGPT Plus で Codex の5時間枠が0%のまま、ChatGPT から Sora Commander にファイル作成を頼み、PC で承認するとファイルができる様子](docs/demo-5h-limit.gif)
+
+デモの `create_file` はv0.6から `dev-write-tools.txt` に `on` の設定が必要です。編集・作成pilotの `request_text_create` でも、承認窓に全文が表示されます。
 
 *26秒、日本語字幕。ChatGPT Plus で Codex の5時間枠が0%の状態で、ChatGPT から Sora Commander にファイル作成を頼み、PC の窓で承認すると、エクスプローラーにファイルができます。2026-11-21 に作者の PC で録画しました。この依頼が動いたことを示すもので、ツール呼び出しがどの枠も使わないことまでは示していません。*
 
@@ -268,7 +281,7 @@ OpenAI の Secure MCP Tunnel で ChatGPT とつなぐ、Windows 用の MCP サ�
 
 許可フォルダの中の対応するテキストファイルを、承認窓で提案された内容を確認して承認した後に、ChatGPT が作成・編集できます。
 
-> **v0.5 開発者向けプレビューです。実用としての受入はしていません。**
+> **v0.6 開発者向けプレビューです。実用としての受入はしていません。**
 > 作者の通常環境に加え、2026-11-09に新しいWindowsサンドボックス（管理者権限のユーザー）で、ChatGPTからのファイル読取りとOwner承認付きコマンドの終了コード0まで試しました。PythonとGitはホストから読み取り専用で借りていました。2026-11-21には、PowerShell 7 のない新しいサンドボックスで Python 3.13 と Git を公式のインストーラーから入れ、`tools\setup.cmd`とランチャーの起動前の確認が、日本語を含むcheckoutのパスでも通りました。トンネルは起動していません。限定的な試行で、実用・本番の受入ではありません。AIにPCを操作させるソフトです。承認窓の内容を読んでから押してください。コマンドの意味を判断できる方だけ使ってください。
 
 合成テストだけで確認したもの：`allowed-roots.txt`（UTF-8、BOMの有無どちらも）の日本語・アクセント付きの名前、ファイル読み取りツール、ローカルのGit履歴、doctorの診断。
@@ -294,17 +307,31 @@ Brokerのパイプが用意できるまで待ってからトンネルを起動�
 
 | 構成 | 登録ツール数 |
 | --- | ---: |
-| ChatGPT（同梱のランチャーで起動。Broker モードでも通常モードでも、編集・作成 pilot はオン） | 54 |
-| 編集・作成 pilot をオフにした ChatGPT 用 Host | 48 |
+| ChatGPT（同梱のランチャーで起動。Broker モードでも通常モードでも、編集・作成 pilot はオン） | 49 |
+| DEV書き込みツールをオンにした ChatGPT 用 Host | 48（編集・作成 pilot もオンなら54） |
+| DEV 書き込みツールと編集・作成 pilot を両方オフにした ChatGPT 用 Host | 43 |
 | 読み取り専用 Muse ブリッジ | 36（`--inbox` 付きは 37） |
 
 過去の変更点にあるツール数は、各リリース時点の数です。
+
+## v0.6.0 の変更
+
+ランチャー名を短くし、リリースタグでの更新とフォルダ一覧の表示を改善しました。
+
+- **v0.5.0 から更新する場合。** [導入手順の「更新する」](docs/INSTALL.ja.md#更新する)に従い、v0.6.0 タグへ更新します。新しいコマンドは[ランチャー名の変更](docs/INSTALL.ja.md#v06-でランチャー名を変更)を参照してください。
+- **DEV 書き込みツールは既定でオフです。** 必要なときに有効にします。編集・作成 pilot は別の設定です。[DEV 書き込みツール](docs/INSTALL.ja.md#dev書き込みツールを有効にする任意)
+- **ログ。** Broker のログオンタスクは出力を上限付きで記録します。Muse のログオンタスクは稼働中にもブリッジのログを切り替えます。
+- **OneDrive。** オンライン専用ファイルも一覧と名前検索に出ます。複数ファイルの内容を扱うツールはダウンロードしません。
+- **フォルダ一覧。** `list_folder` と `list_folder_page` は出力上限やページ分けを適用する前の `omitted_entries` を返します。
+- **Muse。** 同じアドレスへの同時照会では利用可能なキャッシュを再利用します。checkout が読み取り許可範囲外の場合、digest は `CHECKOUT_NOT_IN_READ_ROOTS` を返します。
+- **ツール説明の短縮。** 承認の共通ルールをサーバー説明にまとめました。Owner が承認窓を閉じた場合は、未決定のまま閉じたと伝えます。
+- **Windows テスト。** 公開版のワークフローはプルリクエストと手動で実行できます。
 
 ## v0.5.0 の変更
 
 セットアップ・キー・更新のヘルパーが入り、起動に PowerShell を使わなくなりました。
 
-- **v0.4.0 から更新するとき：** v0.4.0 には更新ヘルパーがないので、[導入手順の「更新する」](docs/INSTALL.ja.md#更新する)のとおり1回だけ手で更新してください。次からは `tools\update.cmd` を使えます。
+- **v0.4.0 から更新するとき：** この版から `tools\update.cmd` が使えます。現在のタグを指定する手順は[導入手順の「更新する」](docs/INSTALL.ja.md#更新する)を参照してください。
 - **`tools\setup.cmd`：** `.venv`を作り、パッケージを入れ、トンネル設定の見本がなければコピーし、doctor で診断して、残りの手作業を一覧にします。`--check`は確認だけです。
 - **`tools\set-tunnel-key.cmd`：** トンネルのキーを画面に出さずに入力し、自分の Windows ユーザーだけが開けるファイルに保存します。`--check`は中身を見せずに形だけを確かめます。`tools\Set-NextTunnelKey.ps1`も引き続き使え、中でこれを呼びます。
 - **`tools\update.cmd`：** 変更のない`main`を確認（`--check`）し、早送りで更新します。
@@ -379,9 +406,9 @@ Brokerのパイプが用意できるまで待ってからトンネルを起動�
 
 ## v0.1.7 の新機能
 
-- 承認窓でReject（`DENIED`）と未決定を区別します。Xは`TIMED_OUT`, `reason=CLOSED`、時間内の無回答は`TIMED_OUT`, `reason=EXPIRED`です。**Xの意味が変わり、以前のバージョンの「閉じると却下」から未決定になりました。** 未決定なら何も実行・書込みされず、ChatGPTは再送や窓の再表示を要求せず、報告して次の指示を待ちます。無回答は拒否でも離席の証拠でもありません。制限時間は変わりません。2026-11-13にBrokerモードでChatGPTを通じた実際の窓を確認しました。確認済みはコマンド窓（Approve、Reject、X、無回答）と`create_file`（X、Approve）です。他の経路はテストでは同じ動作ですが、実際の窓では未確認です。未確認の範囲は`create_file`と他のDEVファイルツールの無回答、DEV `send_input`、対話型の2つ目の窓、テキスト編集・作成pilot、`run_task`、`ogf_cue`です。このDEV確認は本番受入を意味しません。対象範囲と結果不明の場合は導入手順を参照してください。
+- 承認窓でReject（`DENIED`）と未決定を区別します。Xは`TIMED_OUT`, `reason=CLOSED`、時間内の無回答は`TIMED_OUT`, `reason=EXPIRED`です。**Xの意味が変わり、以前のバージョンの「閉じると却下」から未決定になりました。** 未決定なら何も実行・書込みされず、ChatGPTは再送や窓の再表示を要求せず、報告して次の指示を待ちます。無回答は拒否でも離席の証拠でもありません。制限時間は変わりません。2026-11-13にBrokerモードでChatGPTを通じた実際の窓を確認しました。確認済みはコマンド窓（Approve、Reject、X、無回答）と`create_file`（X、Approve）です。このリリース時点では、次の経路は合成テストのみでした。`create_file`と他のDEVファイルツールの無回答、DEV `send_input`、対話型の2つ目の窓、テキスト編集・作成pilot、`run_task`、`ogf_cue`です。このDEV確認は本番受入を意味しません。対象範囲と結果不明の場合は導入手順を参照してください。
 - `activity`は現在の実行で分かっている操作とIDを承認窓なしで確認し、ID・状態・時刻だけを表示します。
-- **更新後はBrokerとそのクライアントを再起動し、その後ChatGPTのツールを再読み込みしてください。** 任意の編集・作成pilot付きDEV構成のツール一覧は54ツールに増え、ツールヘルプも変わりました。表示数はHost構成によります。
+- **更新後はBrokerとそのクライアントを再起動し、その後ChatGPTのツールを再読み込みしてください。** v0.6からHostの既定は43ツール、編集・作成pilotをオンにすると49ツールです。DEV書き込みツール5件はOwnerが有効にできます。
 
 v0.1.5の任意の編集・作成pilot付きDEV構成では53ツールです。表示数はHost構成によります。`git_snapshot`（状態）、`git_diff`（差分）、
 `git_log`（履歴）、`git_show`（コミットや過去のファイル）、`git_remote_check`

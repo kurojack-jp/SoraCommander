@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 async def main():
     params = StdioServerParameters(
-        command="cmd.exe", args=["/d", "/c", str(ROOT / "tools" / "next-development.cmd")],
+        command="cmd.exe", args=["/d", "/c", str(ROOT / "tools" / "mcp-direct.cmd")],
         cwd=str(ROOT))
     async with stdio_client(params) as (reader, writer):
         async with ClientSession(reader, writer,

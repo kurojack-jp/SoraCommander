@@ -90,3 +90,32 @@ def owner_ui_language():
 def owner_ui_language_source():
     owner_ui_language()
     return _cached[1]
+
+
+class DevWriteToolsError(ValueError):
+    """The Owner's DEV tool opt-in is unusable."""
+
+
+def resolve_dev_write_tools(environ=None):
+    """Read the optional Owner opt-in once during startup."""
+    language_path = language_file(environ)
+    if language_path is None:
+        return False
+    path = language_path.with_name("dev-write-tools.txt")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise DevWriteToolsError("could not be read") from None
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or getattr(info, "st_file_attributes", 0) & 0x400):
+        raise DevWriteToolsError("must be an ordinary file")
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(5)
+    except OSError:
+        raise DevWriteToolsError("could not be read") from None
+    if data not in (b"on", b"on\n", b"on\r\n"):
+        raise DevWriteToolsError("must contain exactly one line, on")
+    return True

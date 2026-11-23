@@ -140,13 +140,14 @@ def _cli_json(arguments, *, runner, finder):
 
 
 class PeerIdentity:
-    """Process-local cache. Lock also coalesces simultaneous lookups for an IP."""
+    """Process-local cache with one lookup at a time per IP."""
 
     def __init__(self, allowed, *, runner=subprocess.run, finder=find_tailscale,
                  clock=time.monotonic):
         self.allowed = frozenset(allowed)
         self.runner, self.finder, self.clock = runner, finder, clock
         self._lock = threading.Lock()
+        self._ip_locks = {}
         self._cache = {}
         self._announced = set()
 
@@ -155,6 +156,10 @@ class PeerIdentity:
 
     def lookup(self, ip) -> str | None:
         with self._lock:
+            ip_lock = self._ip_locks.get(ip)
+            if ip_lock is None:
+                ip_lock = self._ip_locks[ip] = threading.Lock()
+        with ip_lock:
             cached = self._cache.get(ip)
             if cached is not None and self.clock() < cached[0]:
                 return cached[1]
@@ -172,9 +177,12 @@ class PeerIdentity:
             else:
                 accepted = stable_id in self.allowed
                 reason = "not in allow-list"
-                if accepted and stable_id not in self._announced:
-                    print(f"[bridge] peer allowed: {stable_id}")
-                    self._announced.add(stable_id)
+                if accepted:
+                    with self._lock:
+                        first_accept = stable_id not in self._announced
+                        self._announced.add(stable_id)
+                    if first_accept:
+                        print(f"[bridge] peer allowed: {stable_id}")
             if not accepted:
                 print(f"[bridge] peer refused: {reason}")
             allowed_id = stable_id if accepted else None
@@ -460,7 +468,8 @@ def _serve_bridge(args, checkout, token, auth, identity):
             try:
                 host = build_exec_host(checkout, enable_edit=args.enable_edit_pilot,
                                        enable_create=args.enable_create_pilot)
-                server = build_server(host, dev_writes_enabled=args.enable_dev_writes)
+                server = build_server(host, dev_writes_enabled=args.enable_dev_writes,
+                                      dev_write_tools_enabled=args.enable_dev_writes)
                 if auth == "pairing":
                     if __package__:
                         from .scn_muse_pairing import Pairing, register_pairing
@@ -507,7 +516,8 @@ def _serve_bridge(args, checkout, token, auth, identity):
         import uvicorn
 
         try:
-            uvicorn.run(app, host=args.bind, port=args.port, log_level="info", proxy_headers=False, ws="none")
+            uvicorn.run(app, host=args.bind, port=args.port, log_level="info",
+                        access_log=False, proxy_headers=False, ws="none")
         finally:
             if args.mode == "exec":
                 print("[bridge] EXEC listener stopped. Reconcile existing jobs; never replay unknown outcomes.")

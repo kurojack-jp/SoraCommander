@@ -2,12 +2,14 @@
 import asyncio
 from contextlib import redirect_stdout, redirect_stderr
 import io
+from ipaddress import IPv4Address
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
+from threading import Event
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
@@ -137,16 +139,40 @@ class IdentityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.runner.call_count, count)
 
     async def test_thread_offload_and_parallel_cache(self):
-        import threading
-        event = threading.Event()
-        self.runner.side_effect = lambda *a, **kw: (event.wait(2), reply())[1]
-        pending = asyncio.create_task(self.request())
-        await asyncio.sleep(0)
-        event.set()
-        self.assertTrue(await pending)
-        self.runner.side_effect = None
-        self.assertTrue(all(await asyncio.gather(*(self.request() for _ in range(4)))))
-        self.runner.assert_called_once()
+        loop = asyncio.get_running_loop()
+        started, same_ip_started = asyncio.Event(), asyncio.Event()
+        release = Event()
+        other_ip = str(IPv4Address(IP) + 1)
+        original_lookup = self.identity.lookup
+
+        def whois(argv, **_):
+            ip = argv[-1]
+            if ip == IP:
+                loop.call_soon_threadsafe(started.set)
+                self.assertTrue(release.wait(5))
+            return reply(addresses=[f"{ip}/32"])
+
+        def second_lookup(ip):
+            if ip == IP:
+                loop.call_soon_threadsafe(same_ip_started.set)
+            return original_lookup(ip)
+
+        self.runner.side_effect = whois
+        first = asyncio.create_task(self.request())
+        duplicates = []
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            with patch.object(self.identity, "lookup", side_effect=second_lookup):
+                duplicates.append(asyncio.create_task(self.request()))
+                await asyncio.wait_for(same_ip_started.wait(), 2)
+                self.assertTrue(await asyncio.wait_for(self.request(ip=other_ip), 2))
+                self.assertFalse(first.done())
+                self.assertFalse(duplicates[0].done())
+        finally:
+            release.set()
+            results = await asyncio.gather(first, *duplicates)
+        self.assertEqual(results, [True, True])
+        self.assertEqual([call.args[0][-1] for call in self.runner.call_args_list], [IP, other_ip])
 
 
 class PeerFileTests(unittest.TestCase):
@@ -184,6 +210,8 @@ class StartupTests(unittest.TestCase):
         self.enterContext(redirect_stdout(io.StringIO()))
         self.errors = self.enterContext(redirect_stderr(io.StringIO()))
         self.run = self.enterContext(patch("uvicorn.run"))
+        self.enterContext(patch.object(
+            bridge, "_bounded_file", return_value=b'{"readonly":["example-node"],"exec":[]}'))
         self.argv = ["--checkout", str(ROOT), "--bind", "100.64.0.1"]
         self.enterContext(patch.dict(os.environ, {"USERPROFILE": str(ROOT)}))
 
@@ -205,8 +233,7 @@ class StartupTests(unittest.TestCase):
 
     def test_example_peer_id_never_listens(self):
         ids = bridge.example_peer_ids(ROOT)
-        if not ids:
-            self.skipTest("docs/muse-bridge-peers.example.json is not in this tree")
+        self.assertEqual(ids, {"example-node"})
         example = {"readonly": sorted(ids), "exec": []}
         for flags in ([], ["--auth", "both"]):
             with self.subTest(flags=flags), patch.object(bridge, "load_peers", return_value=example):
@@ -257,6 +284,7 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(gate.auth, auth)
                 self.assertEqual(token.call_count, int(auth != "tailscale"))
                 self.assertFalse(self.run.call_args.kwargs["proxy_headers"])
+                self.assertIs(self.run.call_args.kwargs["access_log"], False)
                 if auth == "token":
                     peers.assert_not_called()
                     self.assertIsNone(gate.identity)

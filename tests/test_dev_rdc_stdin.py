@@ -382,7 +382,7 @@ class StdinTests(unittest.TestCase):
         from sora_commander_next.mcp_adapter import build_server
         host = Host()
         self.addCleanup(host.close)
-        server = build_server(host)
+        server = build_server(host, dev_write_tools_enabled=True)
         with patch.object(host.jobs, 'read') as read, patch.object(host.jobs, 'stop') as stop:
             self.assertEqual(host.read_process_output('a'*48)['status'], 'ERROR')
             self.assertEqual(host.await_process_output('a'*48, wait_seconds=0)['status'], 'ERROR')
@@ -432,7 +432,7 @@ class StdinTests(unittest.TestCase):
         from sora_commander_next.windows_session_events import OwnerSessionEventLatch
         self.host.jobs = JobManager(journal_path=self.root/'journal.json',
             output_archive_path=self.root/'owner-output-archive.json', protected_stage=True)
-        sdk = build_server(self.host)
+        sdk = build_server(self.host, dev_write_tools_enabled=True)
         request = self.command()
         pending = self.host.run_command(executable=request.executable, argv=list(request.argv),
             cwd=request.cwd, timeout=10, request_id=request.request_id,

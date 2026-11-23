@@ -31,7 +31,7 @@
       "id": "startup-mode",
       "attributes": {
         "label": "Startup mode / 起動モード",
-        "options": ["Broker mode / Broker モード", "Usual mode / 普段のモード"]
+        "options": ["Broker mode / Broker モード", "Usual mode / 通常モード", "Read-only Muse / 読み取り専用 Muse", "Setup or update / 導入・更新", "Other or unknown / その他・不明"]
       },
       "validations": {"required": true}
     },
@@ -70,7 +70,7 @@
       "id": "messages",
       "attributes": {
         "label": "Displayed messages / 表示されたメッセージ",
-        "description": "Before pasting, remove API keys, tunnel IDs, personal file contents and paths. Do not attach full logs or screenshots containing them. / 貼る前に API キー、トンネル ID、個人のファイルの内容やパスを消してください。それらが含まれるログ全文やスクリーンショットも添付しないでください。",
+        "description": "Before pasting, remove API keys, tunnel IDs, personal file contents and paths. Also remove IP addresses, device IDs, user names and PC names. Do not attach full logs or screenshots containing them. / 貼る前に API キー、トンネル ID、個人のファイルの内容やパスを消してください。IP アドレス、端末 ID、ユーザー名、PC 名も消してください。それらが含まれるログ全文やスクリーンショットも添付しないでください。",
         "render": "text"
       },
       "validations": {"required": false}

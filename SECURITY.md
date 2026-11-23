@@ -6,7 +6,7 @@ Sora Commander lets an AI run commands on your PC. Please treat a problem in its
 
 **Do not open a public issue for a security problem.** Use [private vulnerability reporting](https://docs.github.com/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability) on this repository.
 
-Include what you did, what you expected, and what happened. Do not include keys or private files. This is a personal project, so there is no promised response time.
+Include what you did, what you expected, and what happened. Remove keys, private files and paths, tunnel IDs, IP addresses and device names from your report. This is a personal project, so there is no promised response time.
 
 ## What it is meant to protect against
 
@@ -22,7 +22,7 @@ Include what you did, what you expected, and what happened. Do not include keys 
 - **A shared ChatGPT connector.** Other workspace members may be able to use the read tools. Do not share it. This OpenAI-side behaviour has not been verified.
 - **A command you approved.** The window shows what will run. It cannot tell you whether that is wise.
 - **Other programs under your own Windows account.** They can read the key file, edit the launch records, and change this code. Keep the checkout in a folder only you can write to.
-- **Your account with OpenAI or ChatGPT.** Anyone who controls it can send requests, though they still need your approval window.
+- **Your account with OpenAI or ChatGPT.** While your connector is running, anyone who can use the account can read permitted files without a window. Requests subject to local review still require your decision. The optional logon task makes the connector available when you sign in.
 - **A different command with the same effect.** The repeat check compares exact commands.
 
 ## Your key

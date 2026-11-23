@@ -9,7 +9,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 import time
 from xml.sax.saxutils import escape
 
@@ -32,8 +32,10 @@ BROKER_WAIT = 30
 TUNNEL_WAIT = 30
 HEALTH_ADDRESS = (str(IPv4Address(0x7F000001)), 8080)
 BROKER_READY = b"[READY] Owner Broker is running. DEV only. Press Ctrl+C here to stop it."
-BROKER_LAUNCHER = r"tools\start-owner-broker-dev.cmd"
-TUNNEL_LAUNCHER = r"tools\start-sora-commander-broker-dev.cmd"
+BROKER_LOG_LINES = 200
+BROKER_LOG_WIDTH = 500
+BROKER_LAUNCHER = r"tools\start-broker.cmd"
+TUNNEL_LAUNCHER = r"tools\start-broker-tunnel.cmd"
 CREATE_SUSPENDED = 0x00000004
 
 
@@ -231,25 +233,38 @@ def _start(job, launcher, *, stdin, stdout):
     return child
 
 
-def _observe_broker(output, ready, finishing):
+def _observe_broker(output, ready, finishing, write_log):
+    lines = 0
+    continuation = False
     try:
         for raw in iter(lambda: output.readline(4096), b""):
+            first_chunk = not continuation
+            continuation = len(raw) == 4096 and not raw.endswith(b"\n")
+            if not first_chunk:
+                continue
             line = raw.rstrip(b"\r\n")
-            if line == BROKER_READY:
+            if not continuation and line == BROKER_READY:
                 ready.set()
             elif (line.startswith(b"[INFO] Broker finished with code ")
                   or (not ready.is_set() and line.startswith(b"[HOLD]"))):
                 # Release the launcher's pause while preserving Broker exit status.
                 finishing.set()
+            if lines < BROKER_LOG_LINES:
+                cleaned = "".join(char for char in line.decode("utf-8", errors="replace")
+                                  if char.isprintable())
+                write_log(f"[broker] {cleaned[:BROKER_LOG_WIDTH]}")
+            elif lines == BROKER_LOG_LINES:
+                write_log("[INFO] Further Broker output was not logged.")
+            lines += 1
     finally:
         finishing.set()
 
 
-def _broker_exit(code, log):
+def _broker_exit(code, write_log):
     if code == 6:
-        print("[INFO] Owner journal is already in use. Nothing else was started.", file=log)
+        write_log("[INFO] Owner journal is already in use. Nothing else was started.")
         return 0
-    print(f"{_timestamp()} Broker exit code: {code}", file=log)
+    write_log(f"{_timestamp()} Broker exit code: {code}")
     return code
 
 
@@ -265,13 +280,20 @@ def _start_mode(log):
     sys.path.insert(0, str(CHECKOUT / "src"))
     from sora_commander_next.windows_job import WindowsJob
 
+    log_lock = Lock()
+
+    def write_log(message):
+        with log_lock:
+            print(message, file=log)
+
     job = WindowsJob()
     broker = None
     observer = None
     try:
         broker = _start(job, BROKER_LAUNCHER, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         ready, finishing = Event(), Event()
-        observer = Thread(target=_observe_broker, args=(broker.stdout, ready, finishing), daemon=True)
+        observer = Thread(target=_observe_broker,
+                          args=(broker.stdout, ready, finishing, write_log), daemon=True)
         observer.start()
         deadline = time.monotonic() + BROKER_WAIT
         while not ready.is_set():
@@ -281,7 +303,7 @@ def _start_mode(log):
             if code is not None:
                 if code == 0:
                     raise Hold("Broker exited before its pipe was ready")
-                return _broker_exit(code, log)
+                return _broker_exit(code, write_log)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise Hold(f"Broker pipe not ready after {BROKER_WAIT} seconds")
@@ -290,8 +312,8 @@ def _start_mode(log):
         code = broker.poll()
         if finishing.is_set() or code is not None:
             broker.stdin.close()
-            return _broker_exit(broker.wait(timeout=5), log)
-        print("[INFO] Broker ready. Starting the tunnel once.", file=log)
+            return _broker_exit(broker.wait(timeout=5), write_log)
+        write_log("[INFO] Broker ready. Starting the tunnel once.")
         tunnel = _start(job, TUNNEL_LAUNCHER, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         deadline = time.monotonic() + TUNNEL_WAIT
         tunnel_ready = False
@@ -299,7 +321,7 @@ def _start_mode(log):
             if finishing.is_set():
                 broker.stdin.close()
             if (code := broker.poll()) is not None:
-                return _broker_exit(code, log)
+                return _broker_exit(code, write_log)
             remaining = deadline - time.monotonic()
             if not tunnel_ready and remaining <= 0:
                 raise Hold(f"Tunnel health port not ready after {TUNNEL_WAIT} seconds")
@@ -310,7 +332,7 @@ def _start_mode(log):
                     tunnel_ready = (_tunnel_ready(min(0.25, remaining))
                                     and time.monotonic() < deadline)
                 continue
-            print(f"{_timestamp()} Tunnel exit code: {code}", file=log)
+            write_log(f"{_timestamp()} Tunnel exit code: {code}")
             return code
     finally:
         try:

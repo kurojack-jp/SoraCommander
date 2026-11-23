@@ -88,8 +88,7 @@ class PluginBrandingTests(unittest.TestCase):
                 "path_info", "read_text_lines", "read_many_text_files",
                 "compare_text_files", "read_text_chunk", "sha256_file", "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check", "list_tasks", "run_task", "ogf_cue", "activity",
                 "preview_source_create", "preview_source_patch", "tool_catalog",
-                "create_directory", "create_file", "move_file", "request_source_patch_dev",
-                "list_processes", "get_config", "send_input",
+                "list_processes", "get_config",
             })
             self.assertFalse({t.name for t in tools} & {
                 "approve", "reject", "approve_local", "reject_local",

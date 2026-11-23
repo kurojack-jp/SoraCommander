@@ -15,11 +15,10 @@ from pathlib import Path
 import shutil
 import stat
 import sys
-import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from uuid import uuid4
+from tests._inherited_test_temp import inherited_test_temp
 import zipfile
 
 from release_wire_fixture_helpers import canonical_json_wire
@@ -63,20 +62,16 @@ def build_wheel(path, *, bad_record=False, altered_member=False):
 
 @unittest.skipUnless(sys.platform == "win32", "Windows fixed-drive staging APIs required")
 class ArtifactAuditTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = Path(cls.enterClassContext(inherited_test_temp()))
+        cls.baseline_candidate = cls.fixture / "candidate"
+        cls.digest = make_candidate(ROOT / "src" / PACKAGE, cls.baseline_candidate)
+
     def setUp(self):
-        # Python 3.13 mkdtemp(mode=0700) creates an owner-only Windows DACL
-        # inaccessible to some restricted test tokens. Create a unique staging
-        # directory with the parent's ordinary defaults; never edit any ACL.
-        parent = Path(tempfile.gettempdir()).absolute()
-        self.home = parent / ("next-bom-files-" + uuid4().hex)
+        self.home = self.fixture / self._testMethodName
         self.home.mkdir()
-        def cleanup():
-            if self.home.absolute().parent != parent or not self.home.name.startswith("next-bom-files-"):
-                raise AssertionError("cleanup escaped ephemeral staging")
-            shutil.rmtree(self.home)
-        self.addCleanup(cleanup)
-        self.candidate = self.home / "candidate"
-        self.digest = make_candidate(ROOT / "src" / PACKAGE, self.candidate)
+        self.candidate = self.baseline_candidate
         self.wheels = self.home / "wheels"
         self.native = self.home / "native"
         self.wheels.mkdir()
@@ -213,6 +208,8 @@ class ArtifactAuditTests(unittest.TestCase):
                 self.run_audit()
 
     def test_candidate_tamper_after_signing(self):
+        self.candidate = self.home / "candidate"
+        shutil.copytree(self.baseline_candidate, self.candidate)
         with (self.candidate / PACKAGE / "__init__.py").open("ab") as stream:
             stream.write(b"\n# tampered\n")
         with patch.object(audit, "audit_wheel_payload") as scanner:

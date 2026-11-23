@@ -216,6 +216,27 @@ class MockedRuntimeTests(unittest.TestCase):
             child.kill.assert_not_called()
         self.job.close.assert_called_once()
 
+    def test_broker_log_sanitizes_and_bounds_physical_lines(self):
+        ready, finishing = Event(), Event()
+        output = io.BytesIO(
+            "合\x00成\x1b\x7f\x85\u202e".encode("utf-8") + b"\r\n"
+            + b"x" * 4096 + autostart.BROKER_READY + b"\r\n"
+            + b"ordinary\n" * 198
+            + b"over the limit\n"
+            + autostart.BROKER_READY + b"\n[INFO] Broker finished with code 0.\n")
+        lines = []
+
+        def write_log(message):
+            lines.append(message)
+            self.assertFalse(ready.is_set())  # The real READY is past the log cap.
+
+        autostart._observe_broker(output, ready, finishing, write_log)
+        self.assertEqual(lines, ["[broker] 合成", "[broker] " + "x" * 500]
+                         + ["[broker] ordinary"] * 198
+                         + ["[INFO] Further Broker output was not logged."])
+        self.assertTrue(ready.is_set())
+        self.assertTrue(finishing.is_set())
+
     def test_broker_exit_six_is_clean_without_tunnel_or_killing_existing_broker(self):
         broker = Mock(stdin=Mock(), stdout=io.BytesIO(
             b"[HOLD] synthetic journal in use\r\n[INFO] Broker finished with code 6.\r\n"))
@@ -225,8 +246,9 @@ class MockedRuntimeTests(unittest.TestCase):
         with patch.object(autostart.sys, "path", autostart.sys.path.copy()):
             self.assertEqual(autostart._start_mode(log), 0)
         self.assertIn("Owner journal is already in use", log.getvalue())
+        self.assertIn("[broker] [HOLD] synthetic journal in use", log.getvalue())
         self.assertEqual(self.popen.call_count, 1)
-        self.assertEqual(self.popen.call_args.args[0][-1], autostart.BROKER_LAUNCHER)
+        self.assertEqual(self.popen.call_args.args[0][-1], r"tools\start-broker.cmd")
         self.job.attach_and_resume.assert_called_once_with(broker)
         broker.kill.assert_not_called()
         self.job.close.assert_called_once()
@@ -234,7 +256,7 @@ class MockedRuntimeTests(unittest.TestCase):
     def test_broker_readiness_precedes_the_one_tunnel_start_and_output_stays_private(self):
         secrets = [b"synthetic-secret-key", b"synthetic-yaml-value", b"synthetic-token",
                    ".".join(("192", "0", "2", "51")).encode()]
-        lines = iter([part + b"\r\n" for part in [*secrets, autostart.BROKER_READY]])
+        lines = iter((autostart.BROKER_READY + b"\r\n",))
         closed = Event()
 
         def read_line(_size):
@@ -249,15 +271,18 @@ class MockedRuntimeTests(unittest.TestCase):
         broker.poll.return_value = None
         tunnel = Mock()
         tunnel.wait.return_value = 19
+        tunnel.stdout = io.BytesIO(b"\n".join(secrets[:2]))
+        tunnel.stderr = io.BytesIO(b"\n".join(secrets[2:]))
         self.popen.side_effect = [broker, tunnel]
         log = io.StringIO()
         with patch.object(autostart.sys, "path", autostart.sys.path.copy()):
             self.assertEqual(autostart._start_mode(log), 19)
         self.assertEqual([item.args[0][-1] for item in self.popen.call_args_list],
-                         [autostart.BROKER_LAUNCHER, autostart.TUNNEL_LAUNCHER])
+                         [r"tools\start-broker.cmd", r"tools\start-broker-tunnel.cmd"])
         self.assertEqual(self.popen.call_args_list[0].kwargs["stdin"], subprocess.PIPE)
         self.assertEqual(self.popen.call_args_list[1].kwargs["stdin"], subprocess.DEVNULL)
         self.assertEqual(self.popen.call_args_list[1].kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIn("[broker] " + autostart.BROKER_READY.decode(), log.getvalue())
         for spawn in self.popen.call_args_list:
             self.assertEqual(spawn.kwargs["stderr"], subprocess.DEVNULL)
         for secret in secrets:

@@ -9,6 +9,12 @@ class ReadBoundaryError(ValueError):
     pass
 
 
+class ReadRootScopeError(ReadBoundaryError):
+    def __init__(self, path, message):
+        super().__init__(message)
+        self.path = path
+
+
 def _require_local_path(value, error_type):
     if str(value).startswith(("\\\\", "//")) or Path(value).drive.startswith("\\\\"):
         raise error_type("UNC and device paths are unsupported")
@@ -23,6 +29,11 @@ def _drive_type(anchor):
 
 
 _NAME_SURROGATE = 0x20000000  # Microsoft reparse-tag bit: "this stands for another name"
+_HIDDEN_OR_SYSTEM = stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM
+FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x40000
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000
+_RECALL_ATTRIBUTES = (FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+                      | stat.FILE_ATTRIBUTE_OFFLINE)
 
 
 def _is_redirecting_link(info, error_type):
@@ -42,6 +53,21 @@ def _is_redirecting_link(info, error_type):
     if tag & _NAME_SURROGATE:
         raise error_type("link target could not be inspected")
     return False
+
+
+def _visible_entry(info):
+    if (getattr(info, "st_file_attributes", 0) & _HIDDEN_OR_SYSTEM
+            or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
+        return False
+    try:
+        return not _is_redirecting_link(info, ReadBoundaryError)
+    except ReadBoundaryError:
+        # Unknown name-surrogate tags are also excluded from enumeration.
+        return False
+
+
+def _recall_required(info):
+    return bool(getattr(info, "st_file_attributes", 0) & _RECALL_ATTRIBUTES)
 
 
 def _require_no_network_link(path, error_type):
@@ -169,8 +195,10 @@ def _sensitive_component(name):
 def _check(path,roots):
     _require_local_path(path, ReadBoundaryError)
     p=Path(path)
-    if not p.is_absolute() or not roots or any(type(r) is not str for r in roots):
+    if not p.is_absolute() or (roots and any(type(r) is not str for r in roots)):
         raise ReadBoundaryError("absolute path and configured roots required")
+    if not roots:
+        raise ReadRootScopeError(path, "absolute path and configured roots required")
     # Reject traversal and NTFS alternate data streams before canonicalization.
     # The drive anchor may contain a colon; child components never may.
     if any(part == ".." or ":" in part for part in p.parts[1:]):
@@ -204,7 +232,7 @@ def _check(path,roots):
                 raise ReadBoundaryError("sensitive path excluded from read scope")
             allowed=True
     if not allowed:
-        raise ReadBoundaryError("outside authorized roots")
+        raise ReadRootScopeError(path, "outside authorized roots")
     for parent in (Path(path),*Path(path).parents):
         if parent.is_symlink() or (hasattr(parent,"is_junction") and parent.is_junction()):
             raise ReadBoundaryError("linked path")
@@ -217,34 +245,23 @@ def list_folder(path,roots,limit=100,depth=0):
         raise ReadBoundaryError("invalid listing depth")
     if depth:
         visible = []
+        visit_counts = []
         # Reuse the navigation scanner's total-entry budget and name policy.
         # Fully consume the bounded scan so truncation never bypasses its cap.
-        for entry, relative, kind in _navigation_entries(path, roots, depth):
+        for entry, relative, kind in _navigation_entries(
+                path, roots, depth, report_visits=visit_counts.append):
             visible.append({"name": entry.name, "type": kind, "path": relative})
-        return {"entries": visible[:limit], "truncated": len(visible)>limit}
+        return {"entries": visible[:limit], "truncated": len(visible)>limit,
+                "omitted_entries": visit_counts[0] - len(visible)}
     p=_check(path,roots)
     if not p.is_dir():
         raise ReadBoundaryError("not a folder")
-    # Count every visited entry, including hidden and denied names, against
-    # the bounded-listing cap, and fail closed instead of materializing an
-    # unbounded directory. Denied names never leak into the result; the
-    # sort key, filter, paging and return shape are unchanged.
-    visible=[]
-    for visited, q in enumerate(p.iterdir(), 1):
-        if visited > MAX_PAGED_FOLDER_ITEMS:
-            raise ReadBoundaryError("folder exceeds bounded listing")
-        if (_read_name_denied(q.name) or q.is_symlink()
-                or (hasattr(q,"is_junction") and q.is_junction())):
-            continue
-        info = q.lstat()
-        if (getattr(info, "st_file_attributes", 0) & (0x2 | 0x4 | 0x400)
-                or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
-            continue
-        visible.append(q)
-    visible.sort(key=lambda q:q.name.lower())
-    return {"entries":[{"name":q.name,"type":"directory" if q.is_dir() else "file"}
-                       for q in visible[:limit]],
-            "truncated":len(visible)>limit}
+    visible, omitted_entries = _folder_entries(p)
+    visible.sort(key=lambda item:item[0].name.lower())
+    return {"entries":[{"name":q.name,"type":"directory" if is_dir else "file"}
+                       for q, is_dir in visible[:limit]],
+            "truncated":len(visible)>limit,
+            "omitted_entries": omitted_entries}
 
 def read_text_file(path,roots,max_bytes=65536):
     import os
@@ -295,13 +312,15 @@ def _verify_named_file(path, roots, opened):
         raise ReadBoundaryError("file identity changed")
 
 
-def _read_inspection_text(path, roots, max_bytes):
+def _read_inspection_text(path, roots, max_bytes, *, skip_recall=False):
     """Bounded single-link read for batch inspection and comparison."""
     import os
     p = _check(path, roots)
     meta = p.stat()
     if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > max_bytes:
         raise ReadBoundaryError("unsupported inspection file")
+    if skip_recall and _bulk_file_may_recall(p):
+        return None
     with p.open("rb") as stream:
         before = os.fstat(stream.fileno())
         if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
@@ -382,6 +401,22 @@ def read_text_page(path, roots, *, offset=0, max_bytes=16384):
 MAX_PAGED_FOLDER_ITEMS = 10000
 
 
+def _folder_entries(folder):
+    # Excluded entries still consume the enumeration budget.
+    visible = []
+    visited = 0
+    for visited, entry in enumerate(folder.iterdir(), 1):
+        if visited > MAX_PAGED_FOLDER_ITEMS:
+            raise ReadBoundaryError("folder exceeds bounded listing")
+        if (_read_name_denied(entry.name) or entry.is_symlink()
+                or (hasattr(entry, "is_junction") and entry.is_junction())):
+            continue
+        info = entry.lstat()
+        if _visible_entry(info):
+            visible.append((entry, stat.S_ISDIR(info.st_mode)))
+    return visible, visited - len(visible)
+
+
 def list_folder_page(path, roots, *, offset=0, limit=100):
     """List a bounded page of non-linked children within an existing read root.
 
@@ -394,39 +429,23 @@ def list_folder_page(path, roots, *, offset=0, limit=100):
     p = _check(path, roots)
     if not p.is_dir():
         raise ReadBoundaryError("not a folder")
-    visible = []
-    for visited, entry in enumerate(p.iterdir(), 1):
-        if visited > MAX_PAGED_FOLDER_ITEMS:
-            raise ReadBoundaryError("folder exceeds bounded listing")
-        if (_read_name_denied(entry.name) or entry.is_symlink()
-                or (hasattr(entry, "is_junction") and entry.is_junction())):
-            continue
-        # Keep the paged view aligned with list_folder(depth=0) and
-        # _navigation_entries: never enumerate Hidden/System/Reparse entries
-        # or filenames of multiply-linked regular files. Filtering precedes
-        # page offsets, counts and the sort, so denied names cannot leak.
-        info = entry.lstat()
-        if (getattr(info, "st_file_attributes", 0) & (0x2 | 0x4 | 0x400)
-                or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
-            continue
-        visible.append(entry)
-        if len(visible) > MAX_PAGED_FOLDER_ITEMS:
-            raise ReadBoundaryError("folder exceeds bounded listing")
+    visible, omitted_entries = _folder_entries(p)
     if _check(path, roots) != p:
         raise ReadBoundaryError("folder path changed")
-    visible.sort(key=lambda q: (q.name.casefold(), q.name))
+    visible.sort(key=lambda item: (item[0].name.casefold(), item[0].name))
     if offset > len(visible):
         raise ReadBoundaryError("folder page offset exceeds entries")
     selected = visible[offset:offset + limit]
     next_offset = offset + len(selected)
     return {
         "entries": [{"name": entry.name,
-                     "type": "directory" if entry.is_dir() else "file"}
-                    for entry in selected],
+                     "type": "directory" if is_dir else "file"}
+                    for entry, is_dir in selected],
         "offset": offset,
         "next_offset": next_offset,
         "total_entries": len(visible),
         "truncated": next_offset < len(visible),
+        "omitted_entries": omitted_entries,
     }
 
 # Phase 10: bounded, read-only source navigation for Owner-selected roots.
@@ -447,8 +466,8 @@ _MAX_SEARCH_BYTES = 12 * 1024 * 1024
 _MAX_SEARCH_FILE = 1024 * 1024
 
 
-def _navigation_entries(path, roots, depth):
-    """Yield regular files and directories, never descending into links."""
+def _navigation_entries(path, roots, depth, *, skip_recall=False, report_visits=None):
+    """Yield visible entries and optionally report visits after a full scan."""
     from collections import deque
     if type(depth) is not int or not 0 <= depth <= 12:
         raise ReadBoundaryError("invalid navigation depth")
@@ -470,11 +489,20 @@ def _navigation_entries(path, roots, depth):
             raise ReadBoundaryError("navigation directory changed")
         entries = []
         try:
-            for entry in directory.iterdir():
-                visited += 1
-                if visited > _MAX_NAV_VISITS:
-                    raise ReadBoundaryError("navigation entry budget exceeded")
-                entries.append(entry)
+            with os.scandir(directory) as children:
+                for child in children:
+                    visited += 1
+                    if visited > _MAX_NAV_VISITS:
+                        raise ReadBoundaryError("navigation entry budget exceeded")
+                    if (_read_name_denied(child.name)
+                            or child.name.casefold() in _SKIP_NAV_DIRS):
+                        continue
+                    # Windows exposes RECALL_ON_OPEN in enumeration metadata.
+                    # Check it before any Path operation that can open the entry.
+                    if skip_recall and os.name == "nt" and _recall_required(
+                            child.stat(follow_symlinks=False)):
+                        continue
+                    entries.append(Path(child.path))
         except PermissionError:
             # A denied child is never traversed; a denied starting root fails.
             if directory == root:
@@ -482,17 +510,13 @@ def _navigation_entries(path, roots, depth):
             continue
         entries.sort(key=lambda p: (p.name.casefold(), p.name))
         for entry in entries:
-            if (_read_name_denied(entry.name)
-                    or entry.name.casefold() in _SKIP_NAV_DIRS):
-                continue
             if entry.is_symlink() or (hasattr(entry, "is_junction") and entry.is_junction()):
                 continue
             try:
                 meta = entry.lstat()
             except PermissionError:
                 continue
-            if (getattr(meta, "st_file_attributes", 0) & (0x2 | 0x4 | 0x400)
-                    or (stat.S_ISREG(meta.st_mode) and meta.st_nlink != 1)):
+            if not _visible_entry(meta) or (skip_recall and _recall_required(meta)):
                 continue
             try:
                 checked = _check(str(entry), roots)
@@ -500,14 +524,15 @@ def _navigation_entries(path, roots, depth):
                 continue
             if checked != entry:
                 raise ReadBoundaryError("navigation path changed")
-            is_dir = entry.is_dir()
-            is_file = entry.is_file()
-            if not (is_dir or (is_file and stat.S_ISREG(entry.stat().st_mode))):
+            is_dir = stat.S_ISDIR(meta.st_mode)
+            if not (is_dir or stat.S_ISREG(meta.st_mode)):
                 continue
             rel = str(entry.relative_to(root)).replace("\\", "/")
             yield entry, rel, "directory" if is_dir else "file"
             if is_dir and level < depth and entry.name.casefold() not in _SKIP_NAV_DIRS:
                 pending.append((entry, level + 1))
+    if report_visits is not None:
+        report_visits(visited)
 
 
 def find_files(path, roots, *, name, max_results=50, depth=8):
@@ -537,10 +562,12 @@ def search_code(path, roots, *, text, max_results=50, depth=8):
     scanned_files = 0
     scanned_bytes = 0
     skipped_large = 0
-    for entry, relative, kind in _navigation_entries(path, roots, depth):
+    for entry, relative, kind in _navigation_entries(path, roots, depth, skip_recall=True):
         if kind != "file" or entry.suffix.casefold() not in _SOURCE_SUFFIXES:
             continue
-        meta = entry.stat()
+        meta = entry.lstat()
+        if _recall_required(meta):
+            continue
         if meta.st_size > _MAX_SEARCH_FILE:
             skipped_large += 1
             continue
@@ -550,6 +577,8 @@ def search_code(path, roots, *, text, max_results=50, depth=8):
         # Validate each concrete file again just before reading. No symlinks,
         # hard links or bytes beyond the 1MiB cap are eligible for code search.
         target = _check(str(entry), roots)
+        if _bulk_file_may_recall(target):
+            continue
         with target.open("rb") as stream:
             before = os.fstat(stream.fileno())
             if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
@@ -684,6 +713,68 @@ def read_text_lines(path, roots, *, start_line=1, max_lines=50):
 
 # Convenience operations for reviewing multiple existing files without a shell.
 # These are READ-ONLY: neither function authorizes editing or creation.
+def _bulk_file_may_recall(path):
+    if os.name == "nt":
+        # Use an exact-name directory query. lstat alone cannot report
+        # RECALL_ON_OPEN on all providers and can open data-only reparse points.
+        import ctypes
+        from ctypes import wintypes
+
+        class FindData(ctypes.Structure):
+            _fields_ = [
+                ("attributes", wintypes.DWORD),
+                ("creation", wintypes.FILETIME),
+                ("access", wintypes.FILETIME),
+                ("write", wintypes.FILETIME),
+                ("size_high", wintypes.DWORD),
+                ("size_low", wintypes.DWORD),
+                ("reserved0", wintypes.DWORD),
+                ("reserved1", wintypes.DWORD),
+                ("name", wintypes.WCHAR * 260),
+                ("short_name", wintypes.WCHAR * 14),
+            ]
+
+        if any(ch in path.name for ch in ("*", "?", ":")):
+            raise ReadBoundaryError("invalid bulk file name")
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        find = kernel.FindFirstFileW
+        find.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(FindData)]
+        find.restype = wintypes.HANDLE
+        close = kernel.FindClose
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
+        data = FindData()
+        handle = find("\\\\?\\" + str(path), ctypes.byref(data))
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not close(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if _read_name_denied(data.name):
+            raise ReadBoundaryError("sensitive path excluded from read scope")
+        if data.attributes & _RECALL_ATTRIBUTES and not data.attributes & stat.FILE_ATTRIBUTE_DIRECTORY:
+            if data.reserved0 & _NAME_SURROGATE:
+                raise ReadBoundaryError("linked path")
+            return True
+    info = path.lstat()
+    if _is_redirecting_link(info, ReadBoundaryError):
+        raise ReadBoundaryError("linked path")
+    return stat.S_ISREG(info.st_mode) and _recall_required(info)
+
+
+def _skip_bulk_file(name, roots):
+    _require_local_path(name, ReadBoundaryError)
+    path = Path(name)
+    if not path.is_absolute() or _read_name_denied(path.name):
+        raise ReadBoundaryError("invalid bulk file path")
+    # Check scope and reject parent links before querying child metadata.
+    parent_name = str(path.parent)
+    # The read boundary also supports a root that is the exact file itself.
+    scope = (parent_name,) if any(type(root) is str and Path(root) == path
+                                  for root in (roots or ())) else roots
+    parent = _check(parent_name, scope)
+    return _bulk_file_may_recall(parent / path.name)
+
+
 def read_many_text_files(paths, roots, *, max_bytes_per_file=8192):
     """One bounded MCP request for at most eight Owner-scoped UTF-8 files."""
     if (type(paths) is not list or not 1 <= len(paths) <= 8
@@ -695,7 +786,13 @@ def read_many_text_files(paths, roots, *, max_bytes_per_file=8192):
     # No partial successful response if a path falls outside configured roots.
     result = []
     for name in paths:
-        data = _read_inspection_text(name, roots, max_bytes_per_file)
+        # Like an out-of-scope path, a cloud-only file fails the whole request:
+        # never drop it silently, and never download it in bulk.
+        if _skip_bulk_file(name, roots):
+            raise ReadBoundaryError("file requires recall; it is not stored locally")
+        data = _read_inspection_text(name, roots, max_bytes_per_file, skip_recall=True)
+        if data is None:
+            raise ReadBoundaryError("file requires recall; it is not stored locally")
         result.append({"path": name, **data})
     return {"files": result, "count": len(result)}
 
@@ -707,8 +804,14 @@ def compare_text_files(before_path, after_path, roots, *, context_lines=3):
             or type(after_path) is not str or not after_path
             or type(context_lines) is not int or not 0 <= context_lines <= 8):
         raise ReadBoundaryError("invalid diff request")
-    before = _read_inspection_text(before_path, roots, 32768)
-    after = _read_inspection_text(after_path, roots, 32768)
+    if _skip_bulk_file(before_path, roots) or _skip_bulk_file(after_path, roots):
+        raise ReadBoundaryError("comparison file requires recall")
+    before = _read_inspection_text(before_path, roots, 32768, skip_recall=True)
+    if before is None:
+        raise ReadBoundaryError("comparison file requires recall")
+    after = _read_inspection_text(after_path, roots, 32768, skip_recall=True)
+    if after is None:
+        raise ReadBoundaryError("comparison file requires recall")
     changes = "".join(difflib.unified_diff(
         before["content"].splitlines(keepends=True),
         after["content"].splitlines(keepends=True),

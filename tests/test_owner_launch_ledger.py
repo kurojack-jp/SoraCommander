@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from tests._inherited_test_temp import inherited_test_temp
+from sora_commander_next import owner_launch_ledger
 from sora_commander_next.commands import Command
 from sora_commander_next.owner_broker_main import LEDGER_NAME, run_ledger_command
 from sora_commander_next.owner_broker_service import _SCHEMAS
@@ -25,14 +26,21 @@ R1, R2, R3 = "1" * 32, "2" * 32, "3" * 32
 
 
 def command(request_id, code="print('ok')", timeout=30):
-    return Command(sys.executable, ("-c", code), str(ROOT), timeout=timeout,
+    return Command(sys.executable, ("-I", "-S", "-B", "-c", code), str(ROOT), timeout=timeout,
                    output_limit=1024, request_id=request_id)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
 class LedgerTestBase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = Path(cls.enterClassContext(inherited_test_temp()))
+
     def setUp(self):
-        self.home = Path(self.enterContext(inherited_test_temp()))
+        self.home = self.fixture / self._testMethodName
+        self.home.mkdir()
+        self.enterContext(patch.dict(os.environ, USERPROFILE=str(self.home),
+                                     LOCALAPPDATA=str(self.home)))
         self.path = self.home / LEDGER_NAME
         self.opened = []
         self.addCleanup(self.close_all)
@@ -307,7 +315,10 @@ class ConcurrencyTests(LedgerTestBase):
         self.ledger().close()
         holder = sqlite3.connect(self.path, isolation_level=None)
         self.addCleanup(holder.close)
-        ledger = self.ledger()
+        # Keep real SQLite writer contention without waiting the production
+        # two-second busy timeout in this refusal test.
+        with patch.object(owner_launch_ledger, "_TIMEOUT_SECONDS", 0.01):
+            ledger = self.ledger()
         manager = DurableJobManager(ledger=ledger)
         self.opened.append(manager)
         holder.execute("BEGIN IMMEDIATE")

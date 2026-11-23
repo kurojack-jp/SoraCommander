@@ -36,25 +36,28 @@ def build_client_host(guard, repo_root, environ, *, pipe_name=None):
 
 
 def main():
+    import sys
+    from .owner_ui_language import DevWriteToolsError, resolve_dev_write_tools
+    try:
+        dev_write_tools_enabled = resolve_dev_write_tools()
+    except DevWriteToolsError as error:
+        print(f"[HOLD] dev-write-tools.txt: {error}", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
     guard = OwnerSessionGuard()
     guard.verify()
     try:
         host = build_client_host(guard, Path(__file__).resolve().parents[2], os.environ)
     except AllowedRootsError as error:
-        import sys
         print(f"[HOLD] {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
     except OgfBridgeError as error:
-        import sys
         print(f'[HOLD] ogf-bridge.json: {error}', file=sys.stderr, flush=True)
         raise SystemExit(2) from None
     except TaskPresetError as error:
-        import sys
         print(f"[HOLD] tasks.json: {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
-    import sys
     print(f"[INFO] Tasks: {len(host.task_presets)}", file=sys.stderr, flush=True)
-    serve_stdio(host)
+    serve_stdio(host, dev_write_tools_enabled=dev_write_tools_enabled)
 
 
 if __name__ == "__main__":

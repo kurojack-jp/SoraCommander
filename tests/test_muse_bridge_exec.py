@@ -128,6 +128,7 @@ class MainTests(unittest.TestCase):
         self.output = self.enterContext(redirect_stdout(io.StringIO()))
         self.errors = self.enterContext(redirect_stderr(io.StringIO()))
         self.run = Mock()
+        self.enterContext(patch.object(bridge, "example_peer_ids", return_value=frozenset()))
         self.enterContext(patch.object(bridge, "load_peers", return_value={
             "readonly": ["read-node"], "exec": ["exec-node"]}))
         self.security = Mock(side_effect=lambda **kw: SimpleNamespace(**kw))
@@ -225,12 +226,15 @@ class MainTests(unittest.TestCase):
                 patch.object(bridge, "build_exec_host", return_value=host) as compose:
             self.assertEqual(bridge.main(self.argv + ["--mode", "exec"]), 0)
         compose.assert_called_once_with(ROOT, enable_edit=False, enable_create=False)
-        self.built.assert_called_once_with(host, dev_writes_enabled=False)
+        self.built.assert_called_once_with(host, dev_writes_enabled=False,
+                                           dev_write_tools_enabled=False)
         self.server.tool.assert_not_called()
         self.assertIsInstance(self.run.call_args.args[0], bridge.TokenGate)
         self.assertEqual(self.run.call_args.args[0].auth, "both")
         self.assertEqual(self.run.call_args.args[0].identity.allowed, frozenset({"exec-node"}))
         self.assertEqual(self.run.call_args.kwargs["port"], 8765)
+        self.assertIs(self.run.call_args.kwargs["access_log"], False)
+        self.assertEqual(self.run.call_args.kwargs["log_level"], "info")
         self.assertIn("1 full, 1 read-only", self.output.getvalue())
         self.assertNotIn(EXEC_TOKEN, self.output.getvalue())
 
@@ -405,7 +409,7 @@ class ReadAndWriteGateTests(unittest.TestCase):
         from sora_commander_next.mcp_adapter import build_server
         host = Host(policy=Policy(roots=(str(ROOT),)))
         with patch("sora_commander_next.dev_rdc_compat.mutate") as mutate:
-            server = build_server(host, dev_writes_enabled=False)
+            server = build_server(host, dev_writes_enabled=False, dev_write_tools_enabled=True)
             response = asyncio.run(server.call_tool("create_file", {
                 "path": str(ROOT / "synthetic-never-created.txt"), "content": "synthetic"}))
         content = response[0] if isinstance(response, tuple) else response

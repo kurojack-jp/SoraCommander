@@ -87,12 +87,34 @@ class ExpandedReadReviewTests(unittest.TestCase):
         def iterdir(path):
             self.assertEqual(path, ROOT)
             return iter(entries)
+        # Deeper navigation enumerates with os.scandir; give it the same entries.
+        real_scandir = reads.os.scandir
+
+        class Entry:
+            def __init__(self, path):
+                self.name, self.path = path.name, str(path)
+
+            def stat(self, follow_symlinks=True):
+                return path_stat(Path(self.path), follow_symlinks=follow_symlinks)
+
+        class Listing:
+            def __enter__(self):
+                return iter([Entry(path) for path in entries])
+
+            def __exit__(self, *exc):
+                return False
+
+        def scandir(path):
+            if Path(path) != ROOT:
+                return real_scandir(path)
+            return Listing()
         original_stat = Path.stat
         def stat(path, *args, **kwargs):
             if any(part in BLOCKED for part in path.parts):
                 self.fail("excluded synthetic entry reached metadata access")
             return original_stat(path, *args, **kwargs)
-        with patch.object(Path, "iterdir", iterdir), patch.object(Path, "stat", stat):
+        path_stat = stat
+        with patch.object(Path, "iterdir", iterdir), patch.object(Path, "stat", stat),                 patch.object(reads.os, "scandir", scandir):
             for depth in (0, 1):
                 result = reads.list_folder(str(ROOT), self.roots, depth=depth)
                 self.assertEqual([e["name"] for e in result["entries"]], [SOURCE.name])

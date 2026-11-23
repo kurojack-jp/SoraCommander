@@ -20,7 +20,7 @@ class MCPReadTests(unittest.TestCase):
                      "stop_process","stop_process_wait","read_process_output",
                      "await_process_output","list_folder","list_folder_page","read_image_file", "activity", "read_text_file","read_text_page","find_files","search_code","path_info","read_text_lines","read_many_text_files","compare_text_files","read_text_chunk","sha256_file", "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check", "list_tasks", "run_task", "ogf_cue",
                      "review_status","preview_text_edit","preview_source_create","preview_source_patch","tool_catalog","list_sessions","previous_sessions","recovery_overview","request_status","previous_output",
-                     "create_directory","create_file","move_file","request_source_patch_dev","list_processes","get_config","send_input"})
+                     "list_processes","get_config"})
   finally:h.jobs.close()
  def test_reads_through_real_sdk(self):
   h=Host(policy=Policy(roots=(str(self.root),)))
@@ -28,8 +28,9 @@ class MCPReadTests(unittest.TestCase):
    s=build_server(h)
    out=asyncio.run(s.call_tool("read_text_file",{"path":str(self.p)}))
    self.assertIn("hello from MCP",str(out))
-   listing=asyncio.run(s.call_tool("list_folder",{"path":str(self.root)}))
-   self.assertIn("readme.txt",str(listing))
+   _, listing=asyncio.run(s.call_tool("list_folder",{"path":str(self.root)}))
+   self.assertEqual(listing, {"entries": [{"name": "readme.txt", "type": "file"}],
+                              "truncated": False, "omitted_entries": 0})
   finally:h.jobs.close()
  def test_empty_roots_rejected(self):
   h=Host()

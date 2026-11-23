@@ -76,8 +76,9 @@ class SingleReadBoundaryTests(unittest.TestCase):
         for name in ("b.txt", "A.txt", "credentials.json"):
             (self.root / name).write_text("x", encoding="utf-8")
         result = reads.list_folder(str(self.root), self.roots, limit=1)
+        # credentials.json is left out and counted, never named.
         self.assertEqual(result, {"entries": [{"name": "A.txt", "type": "file"}],
-                                  "truncated": True})
+                                  "truncated": True, "omitted_entries": 1})
 
 
 if __name__ == "__main__":

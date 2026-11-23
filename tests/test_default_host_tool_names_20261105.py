@@ -17,12 +17,12 @@ DEFAULT_TOOLS = frozenset({
     "git_snapshot", "git_diff", "git_log", "git_show", "git_remote_check", "list_tasks", "read_image_file",
     # Registered by default, but execution still requires Owner approval.
     "run_task", "ogf_cue",
-    "await_command_result", "await_process_output", "compare_text_files", "create_directory", "create_file",
-    "find_files", "get_config", "list_folder", "list_folder_page", "list_processes", "list_sessions", "move_file",
+    "await_command_result", "await_process_output", "compare_text_files",
+    "find_files", "get_config", "list_folder", "list_folder_page", "list_processes", "list_sessions",
     "path_info", "ping", "preview_source_create", "preview_source_patch", "preview_text_edit", "previous_output",
     "previous_sessions", "read_many_text_files", "read_process_output", "read_text_chunk", "read_text_file",
-    "read_text_lines", "read_text_page", "recovery_overview", "request_source_patch_dev", "request_status",
-    "review_status", "run_command", "run_command_wait", "search_code", "send_input", "sha256_file", "status",
+    "read_text_lines", "read_text_page", "recovery_overview", "request_status",
+    "review_status", "run_command", "run_command_wait", "search_code", "sha256_file", "status",
     "stop_process", "stop_process_wait", "tool_catalog", "activity",
 })
 NEVER_REMOTE = frozenset({"approve_local", "reject_local", "add_grant_local", "replace_text"})

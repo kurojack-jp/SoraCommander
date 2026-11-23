@@ -64,12 +64,28 @@ class RootRuleTests(unittest.TestCase):
 
     def test_plain_path_rejects_files_and_ancestor_reparse_points(self):
         directory = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0, st_nlink=1)
-        reparse = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400, st_nlink=1)
         file = SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=0, st_nlink=1)
         path = Path("C:/Work/Project")
-        for values in ((directory, reparse), (directory, directory, file)):
+        redirects = [SimpleNamespace(st_mode=stat.S_IFDIR, st_nlink=1, st_reparse_tag=tag,
+                                     st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+                     for tag in (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT,
+                                 0xA000001F)]
+        for values in [(directory, meta) for meta in redirects] + [(directory, directory, file)]:
             with patch.object(Path, "lstat", side_effect=values), self.assertRaises(ValueError):
                 roots._plain_path(path, directory=True)
+
+    def test_data_only_ancestor_allowed_for_root_and_refused_for_config(self):
+        path = Path("C:/Work/Project")
+        directory = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0, st_nlink=1)
+        cloud = SimpleNamespace(st_mode=stat.S_IFDIR, st_nlink=1, st_reparse_tag=0x9000001A,
+                                st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        with patch.object(Path, "lstat", side_effect=(directory, cloud, directory)), \
+                patch.object(Path, "resolve", return_value=path):
+            self.assertEqual(roots._plain_path(path, directory=True), path)
+        file = SimpleNamespace(**{**vars(cloud), "st_mode": stat.S_IFREG})
+        for metadata in ((directory, cloud), (directory, directory, file)):
+            with patch.object(Path, "lstat", side_effect=metadata), self.assertRaises(ValueError):
+                roots._plain_path(path, directory=False)
 
     def test_tests_profile_never_reads_configuration_or_environment(self):
         with patch.object(Path, "resolve", return_value=Path("C:/Checkout")), \

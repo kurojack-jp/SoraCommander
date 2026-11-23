@@ -143,7 +143,7 @@ def check_bridge(environ, root):
 
 
 def tunnel_paths(environ):
-    # Tracked start-sora-commander-broker-dev.cmd / environment launcher paths.
+    # Tracked start-broker-tunnel.cmd / environment launcher paths.
     config = Path(environ["USERPROFILE"]) / ".config/tunnel-client"
     return config / "sora-next.yaml", config / "sora-next.key"
 

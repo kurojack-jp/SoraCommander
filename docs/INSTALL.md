@@ -53,30 +53,35 @@ Use the manual steps below as the reference.
 
 ## Updating
 
-**Updating from v0.4.0:** v0.4.0 has no update helper, so update once by hand.
-Stop the tunnel, the Broker and the Muse bridge (and their logon tasks if you
-installed them). Then, in a clean checkout on `main`:
+**From v0.5.0 or v0.4.0.** Wait for the official v0.6.0 release.
+The v0.5.0 helper advances to `origin/main`. The v0.4.0 release has no helper.
+For a tag-pinned update, stop the tunnel, Broker, Muse bridge and their active logon tasks.
+Use a clean `main` tracking the official HTTPS `origin/main`.
+Fetch the annotated tag and verify it against the official GitHub release before merging.
+Stop if you cannot verify the tag or Git cannot fast-forward.
 
 ```bat
-git pull --ff-only
+git fetch --tags origin
+git show --no-patch v0.6.0
+git merge --ff-only --no-overwrite-ignore v0.6.0
 tools\setup.cmd --check
 ```
 
-Follow any TODO or HOLD lines, then restart. From then on, use the helper below.
+Address any TODO or HOLD lines before restarting. See the [launcher table](#launcher-names-changed-in-v06) for existing scripts and tasks.
+Create `dev-write-tools.txt` only if you use the [DEV write tools](#enable-the-dev-write-tools-optional).
 
-From the checkout, run `tools\update.cmd --check` to preview the incoming
-release tags and find the release notes. The preview fetches tags and updates
-remote-tracking refs. To apply the update, run `tools\update.cmd`. It
-fast-forwards `main` to `origin/main`; the tags only name the release notes.
+**From v0.6.0 onward.** Run `tools\update.cmd --check` to preview the latest release.
+The preview fetches tags and updates remote-tracking refs. When an update is available, it prints the release notes URL.
+Run `tools\update.cmd` to apply it. The helper picks the highest numbered annotated `vX.Y.Z` tag.
+It verifies the tag against the official HTTPS origin and checks that its commit is reachable from `origin/main`.
+It relies on the official HTTPS origin and checks no tag signature.
+If `main` already includes the tag's commit, no code update is needed.
 
-The helper requires a clean `main` tracking the official HTTPS `origin/main`,
-and stops if it finds local changes, running Sora Commander processes from
-the checkout, or a non-fast-forward history. It prints how to stop the
-processes yourself and preserves ignored files that would be overwritten.
-After updating the code, it checks the Python packages offline. If packages
-are missing or incompatible, follow the prompt to run `tools\setup.cmd`
-separately before restarting. After any update, restart the services you use
-and refresh the tools in ChatGPT and on the Muse side.
+Use Git for Windows from its default folder. The helper requires a clean `main` tracking the official `origin/main`.
+It stops if it cannot verify the checkout is idle or if Git cannot fast-forward while preserving ignored files.
+It checks Python packages offline after updating. Address any HOLD before restarting.
+If the package check asks for it, run `tools\setup.cmd` separately.
+Restart the services you use and refresh the tools in ChatGPT and Muse.
 
 ## 1. Get the code and Python packages
 
@@ -190,9 +195,10 @@ Rejected folders include:
 - Paths containing a protected name (listed below).
 
 **Protected names.** Inside allowed folders, files and folders with these names
-cannot be read and are silently left out of listings and searches, so ChatGPT
-or Muse does not see them at all. A direct read returns
+cannot be read and are excluded from listings and searches. A direct read returns
 `sensitive path excluded from read scope`. Matching ignores case.
+`list_folder` and `list_folder_page` report `omitted_entries` before the
+output limit or pagination. The count covers the entries examined by that call.
 
 - Any name starting with `.` (hidden), ending with a space or `.`, containing
   `:` or a control character, or naming a device such as `CON`, `NUL`, `COM1` or `LPT1`.
@@ -210,6 +216,8 @@ or Muse does not see them at all. A direct read returns
 
 These rules lean to the safe side and can hide ordinary project folders such
 as `src/state`. Open such files yourself if you need them.
+
+**OneDrive online-only files.** Files that OneDrive keeps only in the cloud are listed and found by name like other files. Code search skips their content. `read_many_text_files` and `compare_text_files` reject the whole request if any input is online-only. Reading one such file with `read_text_file` downloads it, as opening it in Explorer would. To use one in a search, open it once or choose "Always keep on this device".
 
 Configuration files reached through links or with invalid UTF-8 are refused too.
 The file is limited to 64 KiB. This list scopes file tools and command working
@@ -233,6 +241,19 @@ startup with a `[HOLD]` message. The language is read at startup; restart the
 Broker and its client after changing it. The Broker reports
 `[INFO] Window language: ...` when it starts. The language changes only the
 window text, never what is checked or approved.
+
+### Enable the DEV write tools (optional)
+
+Create the ordinary file `%USERPROFILE%\.config\sora-commander\dev-write-tools.txt`
+only if you use these tools. It must contain just lowercase `on`.
+No line ending, LF and CRLF are accepted. Spaces, a BOM, comments and `off` are invalid.
+A missing file turns the tools off. An invalid file stops startup with `[HOLD] dev-write-tools.txt: ...`.
+
+Restart the Broker and its client, or the usual-mode Host. Then refresh the tools in ChatGPT.
+The Broker window prints `[INFO] DEV write tools: on` or `[INFO] DEV write tools: off`.
+The text edit/create pilot has its own setting.
+
+`create_directory` creates one folder, `create_file` creates a text file, `move_file` moves or renames a file, and `request_source_patch_dev` applies a literal source replacement. `send_input` submits one numeric expression to an approved DEV interactive session in usual mode. Each supported use still opens the local Owner approval window.
 
 ### Task presets (optional)
 
@@ -269,15 +290,18 @@ Choose one mode. **Never run both at once.**
 
 **Broker mode (recommended/default).** Jobs and approval windows live in a separate process, so they survive a tunnel restart. Double-click `tools\start-broker-mode.cmd` once. It opens the Broker in its own window, waits until the Broker pipe is present, then starts the tunnel. This checks pipe existence, not a Broker response. Keep both windows open. To stop, press `Ctrl+C` in the tunnel window first, then in the Broker window.
 
-To restart only the tunnel, use `tools\start-sora-commander-broker-dev.cmd` while the Broker stays up.
+For a manual start in two windows, start `tools\start-broker.cmd` first.
+When the Broker is ready, start `tools\start-broker-tunnel.cmd`. Use the same
+launcher to restart just the tunnel. It supplies `mcp-broker-client.cmd` to
+`tunnel-client` on the command line.
 
 Stay signed in. The approval window cannot open on a locked session.
 
-**Optional usual mode:** double-click `tools\start-sora-commander-local.cmd` once,
+**Optional usual mode:** double-click `tools\start-usual-mode.cmd` once,
 and keep its window open. This mode has no Broker-mode duplicate-execution
 protection after a restart. Never use a mode change to retry an unknown command.
 The example YAML uses the Broker client; usual mode requires changing its command
-to the same folder's `next-development.cmd` before starting it.
+to the same folder's `mcp-direct.cmd` before starting it.
 
 ### Start at logon (optional)
 
@@ -293,8 +317,12 @@ While you are signed in, ChatGPT can read your allowed folders without
 opening an approval window, just as with a manual start. Actions that require
 approval still need you to respond at the PC.
 
-The log is `%LOCALAPPDATA%\SoraCommanderNext\broker-autostart.log`. At startup
-a log larger than 1 MiB is moved to `broker-autostart.log.1`. Use these
+The log is `%LOCALAPPDATA%\SoraCommanderNext\broker-autostart.log`. It
+records up to 200 lines from the Broker's combined output, with up to 500
+characters per line. It records the tunnel's exit code if the tunnel exits first.
+Tunnel output is discarded. Before sharing a log, read it and remove
+any private information. At startup a log larger than 1 MiB is moved to
+`broker-autostart.log.1`. Use these
 commands to check the task, start it now, or stop it.
 
 ```cmd
@@ -305,6 +333,21 @@ schtasks /End /TN "SoraCommander Broker mode"
 
 Run `tools\uninstall-broker-autostart.cmd` to remove the task. If the task is
 running, this ends it first, so check that no job is still running.
+
+## Launcher names changed in v0.6
+
+| Old name | New name |
+| --- | --- |
+| `start-owner-broker-dev.cmd` | `start-broker.cmd` |
+| `start-sora-commander-broker-dev.cmd` | `start-broker-tunnel.cmd` |
+| `next-development-broker-client.cmd` | `mcp-broker-client.cmd` |
+| `next-development.cmd` | `mcp-direct.cmd` |
+| `start-sora-commander-local.cmd` | `start-usual-mode.cmd` |
+
+Both sets are under `tools\`. The old names still work through v0.7.
+Broker mode supplies the new client command at launch. For usual mode,
+set the YAML `command` to the absolute path of `tools/mcp-direct.cmd` when switching names.
+An existing Broker logon task calls the Python helper and needs no change.
 
 ## 6. Connect ChatGPT
 
@@ -318,8 +361,9 @@ Expected: `status` shows `remote_ready: false` and `approval: LOCAL_DEMO_ONLY`.
 
 | Configuration | Registered tools |
 | --- | ---: |
-| ChatGPT, started as in section 5 (Broker mode or usual mode; the edit/create pilot is on) | 54 |
-| ChatGPT Host with the edit/create pilot turned off | 48 |
+| ChatGPT, started as in section 5 (Broker mode or usual mode; the edit/create pilot is on) | 49 |
+| ChatGPT Host with DEV write tools on | 48 (54 with the edit/create pilot) |
+| ChatGPT Host with both opt-ins off | 43 |
 | Muse read-only bridge | 36, or 37 with `--inbox` |
 
 Older sections give the tool count at the release they describe.
@@ -330,7 +374,7 @@ and it can do anything your account can.**
 
 ## When something goes wrong
 
-If ChatGPT says the review ended with no decision, nothing ran; ask again when you are ready.
+If a review ended without a decision, the reviewed operation did not run. Only a new explicit instruction from you can start a new request.
 
 Run `.venv\Scripts\python.exe tools\scn_doctor.py` for a read-only setup check
 with fix hints. It starts nothing and never reads the tunnel key or YAML.
@@ -347,8 +391,8 @@ Owner journal.
 |---|---|---|
 | `A tunnel is already running or port 8080 is in use` | A tunnel is up, or something else holds the port | Do not start a second one |
 | `A tunnel is running. Stop it first` | The Broker must start before the tunnel | Stop the tunnel, then start in the order above |
-| `A Broker is already running` | Broker mode is already up | Start only the tunnel with `tools\start-sora-commander-broker-dev.cmd` |
-| `The Broker pipe was not ready within 30 seconds` | The Broker did not start | Read the Broker window, fix the cause, then start again |
+| `A Broker is already running` | Broker mode is already up | Start only the tunnel with `tools\start-broker-tunnel.cmd` |
+| `The Broker pipe was not ready within 30 seconds` | The launcher did not see the Broker pipe in time | Read the Broker window, fix the cause, then start again |
 | `Could not check ...` (exit 2) | Windows could not answer a start check, so nothing was started | Try again later; if it repeats, report the line |
 | `Required local component is missing` (exit 2) | A file the launcher needs is absent, often `.venv` | Run `tools\setup.cmd`, or check the release checkout |
 | `GIT_NOT_INSTALLED` | Git for Windows is not in `C:\Program Files\Git` | Install it in the default folder |
@@ -457,7 +501,9 @@ The in-memory window holds 512 operations for one hour and is lost when the Brok
 
 ## Approval ending without a decision (v0.1.7)
 
-Live-checked on 2026-11-13 with real windows through ChatGPT in Broker mode: command windows (Approve, Reject, X, no answer) and `create_file` (X, Approve). Other paths behave the same way in tests but have not been checked with real windows: no answer for `create_file` and the other DEV file tools, DEV `send_input`, the interactive second window, the text edit/create pilot, `run_task` and `ogf_cue`. These DEV checks do not establish production acceptance.
+ChatGPT DEV checks in Broker mode covered command reviews (Approve, Reject, X and no answer) and `create_file` (X and Approve) on 2026-11-13. On 2026-11-18 they covered no answer for the DEV file tools, the create pilot and `run_task`, and X for `create_directory`, the edit pilot and `run_task`. On 2026-11-19 the Broker-less Muse DEV Host covered no answer and Reject in the interactive second window, and X, no answer and Approve for `send_input`. These are limited DEV checks. `ogf_cue` has no live review check.
+
+Report `reason=CLOSED` as “the Owner closed the window without deciding”. Report `reason=EXPIRED` as “no answer by the deadline”.
 
 | What the Owner did | Result ChatGPT gets | What it means |
 |---|---|---|
@@ -473,14 +519,18 @@ This covers command windows (`run_command*`, `run_task`, `ogf_cue`), the DEV fil
 
 ## Run the tests
 
+In the checkout root, create an ordinary `temp` directory if it is missing. Some tests need it.
+
 ```powershell
+if (-not (Test-Path -LiteralPath temp)) { mkdir temp }
 $env:PYTHONPATH = "src;."
 $m = Get-ChildItem tests\test_*.py | ForEach-Object { "tests." + $_.BaseName }
-.venv\Scripts\python.exe tests\run_with_real_dialog_guard.py @m
+.venv\Scripts\python.exe -B tests\run_with_real_dialog_guard.py @m
 ```
 
 The public release includes only a subset of the development tests. This command
 runs the test modules included in your copy, with a guard that fails any attempt
-to open a real approval window; it is not the full development regression suite.
-The tests do not need a tunnel and take a few minutes. Run them from a path with
-no folder named `temp` and no folder starting with a dot, or some tests skip.
+to open a real approval window. The Windows GitHub workflow runs the same
+public subset on pull requests and by manual dispatch.
+The tests do not need a tunnel and take a few minutes. Run them from a checkout whose path has
+no component named `temp` or starting with a dot, or some tests skip.

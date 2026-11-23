@@ -1,9 +1,14 @@
 """Window language: language.txt first, else the Windows display language."""
 import ast
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+import os
+import stat
+from types import SimpleNamespace
 from pathlib import Path
 import sys
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -133,3 +138,93 @@ class WiringTests(TestCase):
         usual = (SOURCE / "stdio_main.py").read_text(encoding="utf-8")
         self.assertIn("owner_ui_language()", usual)
         self.assertIn("file=sys.stderr", usual)
+
+
+class DevWriteToolsTests(TestCase):
+    def setUp(self):
+        self.profile = Path(self.enterContext(inherited_test_temp()))
+        self.enterContext(patch.dict(os.environ, USERPROFILE=str(self.profile),
+                                     LOCALAPPDATA=str(self.profile / "Local"), clear=True))
+        self.config = lang.language_file().with_name("dev-write-tools.txt")
+        self.config.parent.mkdir(parents=True)
+
+    def test_usual_and_broker_client_startup_register_only_with_on(self):
+        from sora_commander_next import owner_broker_client_main as client, stdio_main
+        from sora_commander_next.host import Host
+        from sora_commander_next.owner_broker_dev import DevBrokerHost
+        from sora_commander_next.mcp_adapter import build_server
+        writers = {"send_input", "create_directory", "create_file", "move_file",
+                   "request_source_patch_dev"}
+        for enabled in (False, True):
+            if enabled:
+                self.config.write_bytes(b"on\r\n")
+            for entry in (stdio_main, client):
+                with self.subTest(enabled=enabled, entry=entry.__name__):
+                    host = DevBrokerHost(Mock(), read_roots=()) if entry is client else Host()
+                    host.task_presets = ()
+                    self.addCleanup(host.close)
+                    with patch.object(stdio_main, "Host", return_value=host), \
+                            patch.object(client, "OwnerSessionGuard"), \
+                            patch.object(client, "build_client_host", return_value=host), \
+                            patch.object(entry, "serve_stdio") as serve, \
+                            patch.object(lang, "resolve_dev_write_tools", wraps=lang.resolve_dev_write_tools) as load, \
+                            redirect_stderr(StringIO()):
+                        entry.main()
+                    load.assert_called_once_with()
+                    serve.assert_called_once()
+                    sdk = build_server(*serve.call_args.args, **serve.call_args.kwargs)
+                    names = {tool.name for tool in sdk._tool_manager.list_tools()}
+                    self.assertEqual(names & writers, writers if enabled else set())
+
+    def test_invalid_config_holds_both_clients_and_broker(self):
+        from sora_commander_next import owner_broker_client_main as client, owner_broker_main as broker, stdio_main
+        args = SimpleNamespace(list_unknown=False, resolve_unknown=None, pipe_name=None)
+        for data in (b"", b"off", b"ON", b" on", b"on\n\n", b"on\n# note", b"\xef\xbb\xbfon"):
+            with self.subTest(data=data):
+                self.config.write_bytes(data)
+                expected = "[HOLD] dev-write-tools.txt: must contain exactly one line, on\n"
+                for entry in (stdio_main, client):
+                    with redirect_stderr(StringIO()) as output, patch.object(entry, "serve_stdio") as serve:
+                        with self.assertRaises(SystemExit) as error:
+                            entry.main()
+                    serve.assert_not_called()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertEqual(output.getvalue(), expected)
+                with redirect_stdout(StringIO()) as output, patch.object(broker, "build_backend_host") as build:
+                    self.assertEqual(broker._run_with_lease(args, None, None), 2)
+                build.assert_not_called()
+                self.assertEqual(output.getvalue(), expected)
+
+    def test_reparse_point_symlink_and_hard_link_are_refused_before_open(self):
+        self.config.write_bytes(b"on")
+        for mode, attributes, links in ((stat.S_IFLNK, 0, 1), (stat.S_IFREG, 0x400, 1),
+                                         (stat.S_IFREG, 0, 2), (stat.S_IFDIR, 0, 1)):
+            with self.subTest(mode=mode, attributes=attributes, links=links):
+                info = SimpleNamespace(st_mode=mode, st_file_attributes=attributes, st_nlink=links)
+                with patch.object(Path, "lstat", return_value=info), patch.object(Path, "open") as open_file:
+                    with self.assertRaisesRegex(lang.DevWriteToolsError, "must be an ordinary file"):
+                        lang.resolve_dev_write_tools()
+                open_file.assert_not_called()
+
+    def test_broker_prints_the_startup_state(self):
+        from sora_commander_next import owner_broker_main as broker
+        args = SimpleNamespace(list_unknown=False, resolve_unknown=None, pipe_name="synthetic")
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                if enabled:
+                    self.config.write_bytes(b"on\n")
+                host = Mock(policy=SimpleNamespace(roots=(), read_only_roots=()),
+                            jobs=SimpleNamespace(_ledger=None))
+                with patch.object(broker, "build_backend_host", return_value=host), \
+                        patch.object(broker, "OwnerBrokerPipeServer") as server, \
+                        patch.object(broker, "OwnerBrokerBackend"), \
+                        patch.object(broker.sys, "stdin", StringIO()), \
+                        patch.object(lang, "owner_ui_language", return_value="en"), \
+                        patch.object(lang, "owner_ui_language_source", return_value="windows"), \
+                        patch.object(lang, "resolve_dev_write_tools", wraps=lang.resolve_dev_write_tools) as load, \
+                        redirect_stdout(StringIO()) as output:
+                    self.assertEqual(broker._run_with_lease(args, None, None), 0)
+                load.assert_called_once_with()
+                server.return_value.start.assert_called_once_with()
+                self.assertIn(f"[INFO] DEV write tools: {'on' if enabled else 'off'}",
+                              output.getvalue().splitlines())

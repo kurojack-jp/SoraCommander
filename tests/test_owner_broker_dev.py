@@ -38,11 +38,6 @@ class Transport:
         pass
 
 
-def catalog(host):
-    server = build_server(host)
-    return _local_registered_catalog(server, host), server
-
-
 def tools(server):
     return {tool.name: tool for tool in asyncio.run(server.list_tools())}
 
@@ -118,20 +113,20 @@ class ToolParityTests(unittest.TestCase):
         self.transport = Transport(OwnerBrokerService(OwnerBrokerBackend(self.backend_host)))
         self.client = DevBrokerHost(self.transport, read_roots=(str(ROOT),),
                                     edit_pilot=True, create_pilot=True)
-        self.server = build_server(self.client)
+        self.server = build_server(self.client, dev_write_tools_enabled=True)
 
     def test_tool_names_and_schemas_match_todays_host(self):
         reference = legacy_host()
         self.addCleanup(reference.close)
-        expected, _ = catalog(reference)
-        actual, _ = catalog(self.client)
+        expected = _local_registered_catalog(build_server(reference, dev_write_tools_enabled=True), reference)
+        actual = _local_registered_catalog(self.server, self.client)
         self.assertEqual(actual["registered_tool_count"], 54)
         self.assertEqual(actual["tool_schema_sha256"], expected["tool_schema_sha256"])
 
     def test_descriptions_match_todays_host(self):
         reference = legacy_host()
         self.addCleanup(reference.close)
-        expected = tools(build_server(reference))
+        expected = tools(build_server(reference, dev_write_tools_enabled=True))
         actual = tools(self.server)
         self.assertEqual(set(actual), set(expected))
         for name in expected:
@@ -242,7 +237,7 @@ class ToolParityTests(unittest.TestCase):
     def test_absent_broker_keeps_reads_and_refuses_the_rest(self):
         client = DevBrokerHost(UnavailableTransport(), read_roots=(str(ROOT),),
                                edit_pilot=True, create_pilot=True)
-        server = build_server(client)
+        server = build_server(client, dev_write_tools_enabled=True)
         self.assertEqual(call(server, "ping", {})["status"], "OK")
         self.assertEqual(call(server, "status", {})["status"], "UNAVAILABLE")
         self.assertIs(call(server, "status", {})["remote_ready"], False)

@@ -9,6 +9,9 @@ An identity-authenticated readonly bridge can enable the optional inbox.
 
 From v0.3.0 the read-only bridge defaults to Tailscale identity. To keep using a
 token, pass `--auth token`, for example with `tools\start-muse-bridge.cmd --auth token`.
+Token mode checks the `x-sora-bridge-token` header without a peers lookup.
+Use `SORA_BRIDGE_TOKEN` or `%USERPROFILE%\.config\sora-commander\muse-bridge-token.txt`
+with a token of at least 32 characters. `--auth both` checks both the token and the peer.
 
 1. Prepare the Python environment in [INSTALL](INSTALL.md)
    (`tools\setup.cmd --muse-only` does it). Install and run Tailscale on the
@@ -16,7 +19,7 @@ token, pass `--auth token`, for example with `tools\start-muse-bridge.cmd --auth
    Create `%USERPROFILE%\.config\sora-commander\allowed-roots.txt` with at
    least one folder, as in INSTALL "Allow your project folders"; the bridge
    does not start without it.
-2. Copy [muse-bridge-peers.example.json](muse-bridge-peers.example.json) to
+2. For `tailscale` (the default) or `both`, copy [muse-bridge-peers.example.json](muse-bridge-peers.example.json) to
    `%USERPROFILE%\.config\sora-commander\muse-bridge-peers.json`.
    Run `tailscale status --json` locally and find the agent node's `ID` field
    (its StableID, ending in `CNTRL`). Replace the example entry in `readonly` with that value; keep `exec`
@@ -99,12 +102,13 @@ StableID from `muse-bridge-peers.json`, then restart the bridge.
 |---|---|---|
 | `Could not determine the Tailscale IPv4 address` | Tailscale is not running on the PC | Start Tailscale, then the bridge again |
 | The bridge window closes or prints a peers error at start | The peers file is missing, empty or not valid JSON, or `readonly` is empty | Copy the example again and put one StableID in `readonly` |
-| The agent gets HTTP 401 | Its node is not in `readonly`, or it is not in your tailnet | Check the StableID; restart the bridge after editing the file |
+| The agent gets HTTP 401 | Authentication failed | In identity mode, check the tailnet and `readonly` StableID. In token mode, check the request header. In `both` mode, check both. Restart after changing bridge configuration |
 | The agent has no `run_command`, `run_task` or other command tool | Expected: the read-only bridge does not list command tools, and a call by name is refused without running anything | Nothing; use the read tools |
 | `[HOLD] allowed-roots.txt is missing` | The read-only bridge requires an explicit folder list | Create `allowed-roots.txt`, list the folders to serve, and restart the bridge |
 | `[HOLD] allowed-roots.txt: allowed-roots line N: ...` | Line N of the folder list is invalid | Fix that line by hand and restart the bridge |
 | `[HOLD] muse-bridge-peers.json still has the example ID` | The example StableID was not replaced | Put the agent's own StableID in `readonly` |
-| `GIT_NOT_INSTALLED` or a Git error in `bridge_digest` | Git for Windows is not in `C:\Program Files\Git`, or the checkout is not in your read folders | Install Git in its default folder; add the checkout to `allowed-roots.txt` if you want its Git summary |
+| `GIT_NOT_INSTALLED` in `bridge_digest` | Git for Windows is not in `C:\Program Files\Git` | Install Git in its default folder |
+| `CHECKOUT_NOT_IN_READ_ROOTS` in `bridge_digest` | Your read folders do not contain the checkout | Add the checkout to `allowed-roots.txt` if you want its Git summary |
 
 Before you share a log or a screenshot, hide the StableIDs, Tailscale addresses
 and PC names in it. The bridge log records each allowed or refused peer.
@@ -134,9 +138,10 @@ schtasks /Run /TN "SoraCommander Muse bridge (read-only)"
 schtasks /End /TN "SoraCommander Muse bridge (read-only)"
 ```
 
-The log is `%LOCALAPPDATA%\SoraCommanderNext\muse-bridge.log`. At startup, a
-log larger than 1 MiB is moved to `muse-bridge.log.1`, replacing the previous
-rotated log. The bridge is unavailable during sleep and can resume with the
+The log is `%LOCALAPPDATA%\SoraCommanderNext\muse-bridge.log`. It rotates at
+startup if it exceeds 1 MiB and during operation before a write would exceed
+that limit. It keeps one older file, `muse-bridge.log.1`. The bridge is
+unavailable during sleep and can resume with the
 same Windows session. Shutdown ends it, and the task starts at the next logon.
 
 ## Inbox (optional)
@@ -164,7 +169,8 @@ and manually remove the files you no longer need. Keep the folder itself.
 readonly bridge, which exposes 36 tools, or 37 with `--inbox`. It returns bridge
 status and version, the configured checkout's branch, HEAD, change counts and
 last three commits, plus recent activity. The Git part needs the checkout to be
-inside your read folders; otherwise that part returns an error code. Use an integer from 0 to 20, with 0 skipping the
+inside your read folders. If it is outside them, `git.error` is
+`CHECKOUT_NOT_IN_READ_ROOTS`. Use an integer from 0 to 20, with 0 skipping the
 activity read. The reply is capped at 16 KiB of UTF-8 JSON. If it needs trimming,
 it marks `truncated: true`, shortens commit subjects first, then drops the oldest
 activity records. An exceptionally long branch name is shortened only if it
@@ -178,15 +184,14 @@ or a mapped network drive) before following it.
 The read-only bridge refuses to start if `allowed-roots.txt` is missing.
 The exec token must differ from any read-only token, including the one supplied by `SORA_BRIDGE_TOKEN`.
 
-A missing, empty or malformed peers file, or an empty `readonly` list, refuses
-startup (`tests.test_muse_bridge_identity.StartupTests.test_missing_invalid_empty_lists_never_listen`
+In `tailscale` or `both` mode, startup stops for a missing, empty or malformed peers file or an empty `readonly` list (`tests.test_muse_bridge_identity.StartupTests.test_missing_invalid_empty_lists_never_listen`
 and `PeerFileTests.test_schema`). Tailscale not running can prevent address
 detection and startup; if a fallback address lets startup continue, identity
 lookup still fails closed. A missing CLI, lookup failure or node absent from
 the list answers HTTP 401
 (`tests.test_muse_bridge_identity.IdentityTests.test_all_lookup_refusals_are_401`
 and `test_timeout_negative_cache`). Successful identity lookups are cached for
-up to 60 seconds; failed lookups for 5 seconds.
+up to 60 seconds. Failures are cached for 5 seconds. Lookups for one address take turns and reuse a cached result when available.
 
 Read-only policy, command refusal and the absence of an approval dispatcher are
 covered by
@@ -196,13 +201,12 @@ These are synthetic tests, not acceptance of another user's setup.
 
 ## Limits
 
-Read-only means the agent's requests cannot run commands or write files. The
-bridge itself still runs fixed, read-only Git commands for the Git tools, and
+The read-only bridge exposes file and Git reads, and optionally `inbox_drop` for
+the single inbox folder. The bridge runs fixed, read-only Git commands, and
 `git_remote_check` contacts the repository's HTTPS remote.
 
 The bridge code also contains an unfinished exec mode for development. It is
-not supported for use. It does not start unless you list a node under `exec`
-in the peers file, and every command it receives still opens the approval window.
+unsupported for general use.
 
 Tested on the author's own setup only. Whether another account's Muse can join
 its own tailnet the same way is not yet confirmed. Muse is a Meta product;

@@ -134,8 +134,13 @@ def _run_with_lease(arguments, guard, repo_root):
             return run_ledger_command(ledger, arguments.resolve_unknown)
         finally:
             ledger.close()
-    from .owner_ui_language import (OwnerLanguageError, owner_ui_language,
-                                    owner_ui_language_source)
+    from .owner_ui_language import (DevWriteToolsError, OwnerLanguageError, owner_ui_language,
+                                    owner_ui_language_source, resolve_dev_write_tools)
+    try:
+        dev_write_tools_enabled = resolve_dev_write_tools()
+    except DevWriteToolsError as error:
+        print(f"[HOLD] dev-write-tools.txt: {error}", flush=True)
+        return 2
     try:
         language = owner_ui_language()
     except OwnerLanguageError as error:
@@ -179,6 +184,7 @@ def _run_with_lease(arguments, guard, repo_root):
         print(f"[INFO] Window language: {language} ("
               f"{'language.txt' if owner_ui_language_source() == 'file' else 'Windows setting'})",
               flush=True)
+        print(f"[INFO] DEV write tools: {'on' if dev_write_tools_enabled else 'off'}", flush=True)
         try:
             for _ in sys.stdin:
                 pass  # Only end of input or Ctrl+C stops the Broker.

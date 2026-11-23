@@ -1,7 +1,7 @@
 """Install, remove, or run the current user's read-only Muse logon task."""
 
 import argparse
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 import ctypes
 from datetime import datetime, timezone
 import ipaddress
@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from threading import Lock, current_thread
 import time
 from xml.sax.saxutils import escape
 
@@ -21,6 +22,7 @@ CHECKOUT = Path(__file__).resolve().parents[1]
 TASK_NAME = "SoraCommander Muse bridge (read-only)"
 LOG_NAME = "muse-bridge.log"
 LOG_LIMIT = 1024 * 1024
+ROTATION_WARNING_INTERVAL = 1024 * 1024
 TAILNET = ipaddress.IPv4Network("100.64.0.0/10")
 # Tailscale on Windows may connect only when its tray app starts, which
 # Windows can delay by minutes after logon (Owner decision: 3 minutes).
@@ -53,12 +55,139 @@ def _log_paths():
     _ordinary(folder, directory=True)
     log = folder / LOG_NAME
     rotated = folder / (LOG_NAME + ".1")
+    _check_log_files(log, rotated)
+    return log, rotated
+
+
+def _check_log_files(log, rotated):
     for path in (log, rotated):
         try:
             _ordinary(path)
         except FileNotFoundError:
             pass
-    return log, rotated
+
+
+class _RotatingLog:
+    encoding = "utf-8"
+    _header = "[INFO] Log rotated.\n"
+
+    def __init__(self, log, rotated, *, rotated_at_startup):
+        self._log = log
+        self._rotated = rotated
+        self._active_path = log
+        self._lock = Lock()
+        self._partial = {}
+        self._bytes_since_warning = ROTATION_WARNING_INTERVAL
+        self._check_paths()
+        self._stream = log.open("a", encoding=self.encoding, buffering=1)
+        self._size = self._stream.tell()
+        if rotated_at_startup:
+            self._append(self._header)
+
+    @staticmethod
+    def isatty():
+        return False
+
+    def _check_parent(self):
+        for directory in reversed(self._log.parents):
+            _ordinary(directory, directory=True)
+
+    def _check_paths(self):
+        self._check_parent()
+        _check_log_files(self._log, self._rotated)
+
+    def _rotate(self):
+        self._check_paths()
+        if self._active_path == self._log:
+            _ordinary(self._log)
+            if self._stream is not None:
+                stream, self._stream = self._stream, None
+                stream.close()
+            os.replace(self._log, self._rotated)
+            self._active_path = self._rotated
+        self._check_paths()
+        fresh = self._log.open("x", encoding=self.encoding, buffering=1)
+        old, self._stream = self._stream, fresh
+        self._active_path = self._log
+        self._size = 0
+        try:
+            if old is not None:
+                old.close()
+        finally:
+            self._append(self._header)
+
+    def _reopen(self):
+        self._check_parent()
+        expected = _ordinary(self._active_path)
+        stream = self._active_path.open("r+", encoding=self.encoding, buffering=1)
+        try:
+            if not os.path.samestat(expected, os.fstat(stream.fileno())):
+                raise Hold("log changed during reopen")
+            self._size = stream.seek(0, os.SEEK_END)
+        except (Hold, OSError):
+            stream.close()
+            raise
+        self._stream = stream
+
+    def _byte_count(self, text):
+        return len(text.replace("\n", os.linesep).encode(self.encoding))
+
+    def _append(self, text):
+        self._stream.write(text)
+        if not text.endswith("\n"):
+            self._stream.flush()
+        self._size += self._byte_count(text)
+
+    def _write(self, text):
+        size = self._byte_count(text)
+        if (self._stream is None or self._active_path == self._rotated
+                or self._size + size > LOG_LIMIT):
+            try:
+                self._rotate()
+            except (Hold, OSError) as error:
+                try:
+                    if self._stream is None:
+                        self._reopen()
+                    if self._bytes_since_warning >= ROTATION_WARNING_INTERVAL:
+                        self._bytes_since_warning = 0
+                        self._append(f"[WARN] Log rotation failed ({type(error).__name__}).\n")
+                    self._append(text)
+                    self._bytes_since_warning += size
+                except (Hold, OSError):
+                    # No safe, writable log is available for this write.
+                    pass
+                return
+        self._append(text)
+        self._bytes_since_warning += size
+
+    def write(self, text):
+        # print() writes its arguments and newline separately.
+        with self._lock:
+            thread = current_thread()
+            text_to_write = self._partial.pop(thread, "") + text
+            line_end = text_to_write.rfind("\n") + 1
+            if line_end < len(text_to_write):
+                self._partial[thread] = text_to_write[line_end:]
+            if line_end:
+                self._write(text_to_write[:line_end])
+        return len(text)
+
+    def flush(self):
+        with self._lock:
+            partial = self._partial.pop(current_thread(), "")
+            if partial:
+                self._write(partial)
+
+    def close(self):
+        with self._lock:
+            try:
+                for partial in self._partial.values():
+                    self._write(partial)
+            finally:
+                self._partial.clear()
+                if self._stream is not None:
+                    stream, self._stream = self._stream, None
+                    stream.close()
 
 
 def _pythonw(checkout):
@@ -229,9 +358,10 @@ def _run(log, rotated, inbox):
         size = _ordinary(log).st_size
     except FileNotFoundError:
         size = 0
-    if size > LOG_LIMIT:
+    rotated_at_startup = size > LOG_LIMIT
+    if rotated_at_startup:
         os.replace(log, rotated)
-    with log.open("a", encoding="utf-8", buffering=1) as stream:
+    with closing(_RotatingLog(log, rotated, rotated_at_startup=rotated_at_startup)) as stream:
         with redirect_stdout(stream), redirect_stderr(stream):
             print(f"{_timestamp()} autostart start")
             try:
@@ -250,6 +380,7 @@ def _run(log, rotated, inbox):
                         "--mode", "readonly", "--auth", "tailscale"]
                 if inbox:
                     argv.append("--inbox")
+                # uvicorn configures its handlers inside main(), under these redirects.
                 code = scn_muse_bridge.main(argv)
             except SystemExit as error:
                 code = error.code if isinstance(error.code, int) else 1

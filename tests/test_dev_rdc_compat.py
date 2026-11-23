@@ -246,10 +246,15 @@ class DevRdcTests(unittest.TestCase):
         self.assertIn("level0/level1/level2/level3/level4", str(listing))
         self.assertNotIn("level5", str(listing))
         original = Path.lstat
-        for attributes in (0x2, 0x4, 0x400):
+        for attributes, tag in (
+            (stat.FILE_ATTRIBUTE_HIDDEN, 0),
+            (stat.FILE_ATTRIBUTE_SYSTEM, 0),
+            (stat.FILE_ATTRIBUTE_REPARSE_POINT, stat.IO_REPARSE_TAG_MOUNT_POINT),
+        ):
             def hidden(path, *args, **kwargs):
                 if path == self.root / "level0":
-                    return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=attributes)
+                    return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=attributes,
+                                           st_reparse_tag=tag)
                 return original(path, *args, **kwargs)
             with patch.object(Path, "lstat", hidden):
                 self.assertNotIn("level0", str(file_reads.list_folder(str(self.root), self.roots, depth=2)))
@@ -553,7 +558,7 @@ class DevRdcTests(unittest.TestCase):
     def test_release_without_dev_module_does_not_register_dev_endpoints(self):
         host = Host(jobs=Mock())
         with patch("importlib.util.find_spec", return_value=None):
-            names = {tool.name for tool in build_server(host)._tool_manager.list_tools()}
+            names = {tool.name for tool in build_server(host, dev_write_tools_enabled=True)._tool_manager.list_tools()}
         self.assertNotIn("request_source_patch_dev", names)
         self.assertNotIn("create_directory", names)
         self.assertNotIn("create_file", names)
@@ -561,7 +566,7 @@ class DevRdcTests(unittest.TestCase):
     def test_sdk_config_mutations_no_job_spawn_and_wire_validation(self):
         jobs = Mock()
         host = Host(policy=Policy(roots=self.roots), jobs=jobs)
-        sdk = build_server(host)
+        sdk = build_server(host, dev_write_tools_enabled=True)
         async def call(name, args):
             _blocks, data = await sdk.call_tool(name, args)
             return data
@@ -735,7 +740,7 @@ class C4InputReviewTests(unittest.TestCase):
         from sora_commander_next.owner_broker_service import _SCHEMAS
         transport = Mock()
         host = DevBrokerHost(transport)
-        sdk = build_server(host)
+        sdk = build_server(host, dev_write_tools_enabled=True)
         async def call():
             _, result = await sdk.call_tool('send_input', dict(
                 session_id=self.sid, input_text='1\n', input_id=self.iid))

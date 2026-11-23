@@ -30,8 +30,9 @@ py -3.13 -B tools\scn_config_builder.py
    Saving backs up existing changed files as `*.bak-YYYYMMDD-HHMMSS`, verifies
    the backup bytes, then atomically replaces each changed file. A backup
    name collision stops the save. It never overwrites an earlier backup.
-5. Read the post-save startup-validation result. Restart both the Broker and
-   client yourself for changes to take effect.
+5. Read the post-save startup-validation result. Restart the Broker and its
+   client by hand. In usual mode, restart the Host. Restart the Muse bridge
+   if it uses the allowed folders.
 
 **Files in allowed folders can be read by ChatGPT without an approval window.**
 Do not allow folders containing secrets. Read-only applies to file tools.

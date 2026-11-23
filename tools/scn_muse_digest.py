@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from sora_commander_next import activity, git_readonly
-from sora_commander_next.file_reads import ReadBoundaryError
+from sora_commander_next.file_reads import ReadBoundaryError, ReadRootScopeError
 from sora_commander_next.mcp_adapter import _local_registered_catalog
 
 
@@ -37,6 +37,8 @@ def _git_summary(checkout, roots):
             "log": commits,
         }
     except ReadBoundaryError as exc:
+        if isinstance(exc, ReadRootScopeError) and exc.path == checkout:
+            return {"error": "CHECKOUT_NOT_IN_READ_ROOTS"}
         code = str(exc)
         return {"error": code if code in git_readonly.REASON_CODES else "PATH_NOT_ALLOWED"}
     except Exception:

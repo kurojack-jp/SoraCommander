@@ -51,7 +51,7 @@ class InstallWriteTests(unittest.TestCase):
         self.assertIs(result["retry_allowed"], False)
 
     def test_each_write_tool_and_both_move_paths_refuse_before_mutation(self):
-        server = build_server(self.host)
+        server = build_server(self.host, dev_write_tools_enabled=True)
         client = DevBrokerHost(Mock(), read_roots=(str(ROOT),))
         self.addCleanup(client.close)
         for target in self.targets():

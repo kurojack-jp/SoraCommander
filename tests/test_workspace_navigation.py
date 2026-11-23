@@ -50,11 +50,26 @@ class NavigationTests(unittest.TestCase):
 
     def test_hidden_entries_consume_traversal_budget_before_sort(self):
         seen = []
-        def entries(_path):
-            for i in range(20):
-                seen.append(i)
-                yield self.root / f".hidden-{i}"
-        with patch("sora_commander_next.file_reads._MAX_NAV_VISITS", 3), patch.object(Path, "iterdir", entries):
+        root = self.root
+
+        class Entry:
+            def __init__(self, i):
+                self.name = f".hidden-{i}"
+                self.path = str(root / self.name)
+
+        class Listing:
+            def __enter__(self):
+                def generate():
+                    for i in range(20):
+                        seen.append(i)
+                        yield Entry(i)
+                return generate()
+
+            def __exit__(self, *exc):
+                return False
+
+        # Navigation enumerates with os.scandir; hidden names still count first.
+        with patch("sora_commander_next.file_reads._MAX_NAV_VISITS", 3),                 patch("sora_commander_next.file_reads.os.scandir", lambda _path: Listing()):
             with self.assertRaises(ReadBoundaryError):
                 find_files(str(self.root), (str(self.root),), name="anything")
         self.assertEqual(len(seen), 4)

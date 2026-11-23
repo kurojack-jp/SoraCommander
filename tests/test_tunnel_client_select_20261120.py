@@ -17,8 +17,7 @@ from tools import scn_tunnel_client as selector
 
 
 class LauncherTests(unittest.TestCase):
-    launchers = tuple(f"start-sora-commander-{kind}.cmd"
-                      for kind in ("broker-dev", "local"))
+    launchers = ("start-broker-tunnel.cmd", "start-usual-mode.cmd")
     source = Path(selector.__file__).parent
 
     def test_shared_rule_rejects_all_disallowed_characters(self):

@@ -10,8 +10,8 @@ rem DEV_ONLY: Broker mode in one step. One manual start, no automatic retry.
 rem Starts the Owner Broker in its own window, waits until its pipe is present,
 rem then starts the tunnel in this window. To stop: Ctrl+C here, then in the Broker window.
 rem --check: runs both launchers' preflight only, nothing is started.
-set "BROKER=%~dp0start-owner-broker-dev.cmd"
-set "TUNNEL=%~dp0start-sora-commander-broker-dev.cmd"
+set "BROKER=%~dp0start-broker.cmd"
+set "TUNNEL=%~dp0start-broker-tunnel.cmd"
 set "CONTROL_PLANE_API_KEY="
 set "PYTHON=%BASE%\.venv\Scripts\python.exe"
 set "CHECK=%BASE%\tools\scn_launch_check.py"
@@ -29,7 +29,7 @@ set "RC=%ERRORLEVEL%"
 if "%RC%"=="7" goto :query_failed
 if "%RC%"=="6" goto :finish
 if "%RC%"=="5" (
-    echo [HOLD] A Broker is already running. Start only the tunnel with start-sora-commander-broker-dev.cmd.
+    echo [HOLD] A Broker is already running. Start only the tunnel with start-broker-tunnel.cmd.
     goto :finish
 )
 if "%RC%"=="3" (

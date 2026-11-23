@@ -10,14 +10,17 @@
 
 v0.3.0から、読み取り専用ブリッジの既定の認証方式はTailscaleのノード識別です。
 トークンを引き続き使う場合は、`tools\start-muse-bridge.cmd --auth token`
-のように`--auth token`を指定します。
+のように `--auth token` を指定します。トークン方式では端末一覧を照会せず、
+`x-sora-bridge-token` ヘッダーを確認します。32文字以上の値を
+`SORA_BRIDGE_TOKEN` または `%USERPROFILE%\.config\sora-commander\muse-bridge-token.txt` に設定します。
+`--auth both` はトークンと端末の両方を確認します。
 
 1. [INSTALL](INSTALL.ja.md)に従ってPython環境を準備します（`tools\setup.cmd --muse-only`
    でも準備できます）。PCでTailscaleを導入・起動し、エージェントのノードを同じtailnetに参加させます。
    INSTALLの「自分のプロジェクトのフォルダを許可する」のとおり、
    `%USERPROFILE%\.config\sora-commander\allowed-roots.txt`を作り、フォルダを1つ以上書きます。
    これがないとブリッジは起動しません。
-2. [muse-bridge-peers.example.json](muse-bridge-peers.example.json)を
+2. `tailscale`（既定）または `both` では、[muse-bridge-peers.example.json](muse-bridge-peers.example.json)を
    `%USERPROFILE%\.config\sora-commander\muse-bridge-peers.json`にコピーします。
    手元で`tailscale status --json`を実行し、エージェントのノードの`ID`
    フィールド（StableID、末尾が`CNTRL`）を探します。`readonly`内の例をその値に置き換え、`exec`は空の
@@ -87,12 +90,13 @@ Tailscaleの管理画面で`muse`の機器を削除し、`muse-bridge-peers.json
 |---|---|---|
 | `Could not determine the Tailscale IPv4 address` | PCでTailscaleが動いていない | Tailscaleを起動してから、ブリッジを起動し直す |
 | 起動時に窓が閉じる、またはpeersのエラーが出る | peersファイルが無い・空・JSONとして不正、または`readonly`が空 | 見本をコピーし直し、`readonly`にStableIDを1つ入れる |
-| エージェントにHTTP 401が返る | そのノードが`readonly`に無い、またはtailnetに入っていない | StableIDを確かめ、ファイルを直したらブリッジを再起動する |
+| エージェントにHTTP 401が返る | 認証に失敗した | 端末識別では tailnet と `readonly` の StableID、トークン方式ではリクエストヘッダー、`both` では両方を確認する。ブリッジの設定を変更したら再起動する |
 | エージェントに`run_command`・`run_task`などのコマンド用ツールがない | 想定どおり。読み取り専用ブリッジはコマンド用ツールを一覧に出さず、名前を指定して呼んでも何も実行せずに拒否する | 何もしない。読み取り用のツールを使う |
 | `[HOLD] allowed-roots.txt is missing` | 読み取り専用ブリッジにはフォルダーの指定が必要 | `allowed-roots.txt`を作成し、公開するフォルダーを記載してブリッジを再起動する |
 | `[HOLD] allowed-roots.txt: allowed-roots line N: ...` | フォルダ一覧のN行目が不正 | その行を手で直し、ブリッジを再起動する |
 | `[HOLD] muse-bridge-peers.json still has the example ID` | 例のStableIDを置き換えていない | `readonly`にエージェント自身のStableIDを入れる |
-| `bridge_digest`で`GIT_NOT_INSTALLED`やGitのエラー | Git for Windowsが`C:\Program Files\Git`にない、またはcheckoutが読み取り許可フォルダに入っていない | Gitを既定のフォルダに入れる。Gitの要約が要るなら、checkoutを`allowed-roots.txt`に足す |
+| `bridge_digest` で `GIT_NOT_INSTALLED` | Git for Windows が `C:\Program Files\Git` にない | Git を既定のフォルダに入れる |
+| `bridge_digest` で `CHECKOUT_NOT_IN_READ_ROOTS` | チェックアウトが読み取り許可フォルダに含まれていない | Git の要約が必要なら、チェックアウトを `allowed-roots.txt` に追加する |
 
 ログや画面写真を人に見せる前に、StableID、Tailscaleのアドレス、PCの名前を
 隠してください。ブリッジのログには、許可・拒否した接続元が記録されます。
@@ -123,8 +127,9 @@ schtasks /End /TN "SoraCommander Muse bridge (read-only)"
 ```
 
 ログは `%LOCALAPPDATA%\SoraCommanderNext\muse-bridge.log` に保存されます。
-起動時に 1 MiB を超えていた場合、既存の `muse-bridge.log.1` を置き換えて
-ローテーションします。スリープ中は接続できず、同じ Windows セッションへの
+起動時に 1 MiB を超えている場合と、稼働中に次の書き込みで 1 MiB を超える場合に
+ローテーションし、直前のログを `muse-bridge.log.1` として 1 世代分保持します。
+スリープ中は接続できず、同じ Windows セッションへの
 復帰時には動作が再開する場合があります。シャットダウンで終了し、次回ログオン時に起動します。
 
 ## Inbox（オプション）
@@ -151,7 +156,8 @@ inbox のファイルはリモートエージェントが送ったものです�
 ツール数は通常 36、`--inbox` 有効時は 37 です。ブリッジの状態と版、指定した
 チェックアウトのブランチと HEAD、変更件数、直近 3 件のコミット、最近の
 アクティビティを返します。Gitの部分は、チェックアウトが読み取り許可フォルダに
-入っているときだけ返り、入っていなければその部分はエラーコードになります。引数は 0〜20 の整数で、0 の場合はアクティビティを
+入っている場合に要約を返します。範囲外の場合、`git.error` は
+`CHECKOUT_NOT_IN_READ_ROOTS` になります。引数は 0〜20 の整数で、0 の場合はアクティビティを
 読み取りません。応答は UTF-8 の JSON で最大 16 KiB です。収まらない場合は
 `truncated: true` を設定し、コミット件名を短くしてから、古いアクティビティを
 順に取り除きます。それでも上限に収まらないほど長いブランチ名は短くします。
@@ -163,14 +169,14 @@ inbox のファイルはリモートエージェントが送ったものです�
 `allowed-roots.txt`が無い場合、読み取り専用ブリッジは起動しません。
 exec用トークンには、`SORA_BRIDGE_TOKEN`を含むどの読み取り専用トークンとも異なる値を使います。
 
-peersファイルの欠落・空ファイル・不正形式、または`readonly`が空の場合は
+`tailscale` と `both` では、peersファイルの欠落・空ファイル・不正形式、または`readonly`が空の場合は
 起動しません
 （`tests.test_muse_bridge_identity.StartupTests.test_missing_invalid_empty_lists_never_listen`、
 `PeerFileTests.test_schema`）。Tailscaleが停止していればアドレス検出に失敗して
 起動できない場合があります。代替アドレスで起動できても、本人確認の照会失敗は
 拒否されます。CLIの欠落、照会失敗、リスト外のノードはHTTP 401になります
 （`tests.test_muse_bridge_identity.IdentityTests.test_all_lookup_refusals_are_401`、
-`test_timeout_negative_cache`）。照会成功は最大60秒、失敗は5秒キャッシュされます。
+`test_timeout_negative_cache`）。照会成功は最大60秒、失敗は5秒キャッシュされます。同じアドレスの照会は順番に扱い、利用可能なキャッシュを再利用します。
 
 読み取り専用ポリシー、コマンド拒否、承認dispatcherがないことは
 `tests.test_muse_bridge_exec.MainTests.test_readonly_token_mode_host_and_banner_are_preserved`
@@ -178,12 +184,12 @@ peersファイルの欠落・空ファイル・不正形式、または`readonly
 
 ## 制限
 
-読み取り専用とは、エージェントからの要求でコマンドの実行やファイルの書き込みができないという意味です。
+読み取り専用ブリッジではファイルと Git を読み取れます。任意で、専用フォルダに書き込む `inbox_drop` を使えます。
 Gitのツールのために、ブリッジ自身は決まった読み取り専用のGitコマンドを動かします。
 `git_remote_check`だけは、リポジトリのHTTPSのリモートに接続します。
 
 ブリッジのコードには、開発中のexecモードも入っています。使うことはサポートしていません。
-peersファイルの`exec`にノードを書かない限り起動せず、受け取ったコマンドはすべて承認窓を出します。
+
 
 試したのは作者自身の環境だけです。別アカウントのMuseが同じ方法で自分の
 tailnetに参加できるかは、まだ確認できていません。MuseはMetaの製品であり、

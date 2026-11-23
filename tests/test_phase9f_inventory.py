@@ -6,21 +6,26 @@ Windows ACL change, Task/Service, remote listener, OS lock or privileged operati
 import ast
 import hashlib
 import json
+import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 from tests._inherited_test_temp import inherited_test_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+from sora_commander_next import release_inventory
 from sora_commander_next.release_inventory import (
     CandidateIntegrityError, DEV_ONLY_MODULES, MANIFEST, MODULES,
     OPTIONAL_DEV_ONLY_MODULES, PACKAGE,
     make_candidate, verify_candidate,
 )
+
+
+SYNTHETIC_MODULES = ("owner_approval_broker.py", "owner_approval_dialog.py", "windows_owner.py")
 
 
 class U2GOfflineInventoryTests(unittest.TestCase):
@@ -51,14 +56,36 @@ class U2GOfflineInventoryTests(unittest.TestCase):
 
 
 class Phase9FCandidateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = Path(cls.enterClassContext(inherited_test_temp()))
+        cls.source = ROOT / "src" / PACKAGE
+        cls.baseline = cls.fixture / "baseline"
+        cls.digest = make_candidate(cls.source, cls.baseline)
+
     def setUp(self):
-        # Non-secret synthetic release fixtures only. Preserve test assertions.
-        self.home = Path(self.enterContext(inherited_test_temp()))
-        self.source = ROOT / "src" / PACKAGE
+        self.home = self.fixture / self._testMethodName
+        self.home.mkdir()
         self.candidate = self.home / "candidate"
 
-    def stage(self):
-        digest = make_candidate(self.source, self.candidate)
+    def synthetic_source(self):
+        # These cases change file contents or membership. Use a small explicit
+        # inventory and run the real staging, hashing and verification code.
+        self.enterContext(patch.multiple(
+            release_inventory, MODULES=SYNTHETIC_MODULES,
+            DEV_ONLY_MODULES=frozenset(), OPTIONAL_DEV_ONLY_MODULES=frozenset()))
+        source = self.home / PACKAGE
+        source.mkdir()
+        for name in SYNTHETIC_MODULES:
+            (source / name).write_text(f"# synthetic {name}\n", encoding="utf-8")
+        return source
+
+    def stage(self, *, mutable=False):
+        if mutable:
+            digest = make_candidate(self.synthetic_source(), self.candidate)
+        else:
+            self.candidate = self.baseline
+            digest = self.digest
         self.assertRegex(digest, r"^[0-9a-f]{64}$")
         return digest
 
@@ -80,21 +107,21 @@ class Phase9FCandidateTests(unittest.TestCase):
                 verify_candidate(self.candidate, trusted_manifest_sha256=wrong)
 
     def test_modified_staged_module_is_detected(self):
-        digest = self.stage()
+        digest = self.stage(mutable=True)
         victim = self.candidate / PACKAGE / "owner_approval_dialog.py"
         victim.write_bytes(victim.read_bytes() + b"\n# tampered\n")
         with self.assertRaises(CandidateIntegrityError):
             verify_candidate(self.candidate, trusted_manifest_sha256=digest)
 
     def test_changed_manifest_even_with_same_modules_is_detected(self):
-        digest = self.stage()
+        digest = self.stage(mutable=True)
         target = self.candidate / MANIFEST
         target.write_bytes(target.read_bytes() + b"\n")
         with self.assertRaises(CandidateIntegrityError):
             verify_candidate(self.candidate, trusted_manifest_sha256=digest)
 
     def test_missing_or_extra_code_blocks_release(self):
-        digest = self.stage()
+        digest = self.stage(mutable=True)
         extra = self.candidate / PACKAGE / "evil.py"
         extra.write_text("print('not executed')\n", encoding="utf-8")
         with self.assertRaises(CandidateIntegrityError):
@@ -105,38 +132,38 @@ class Phase9FCandidateTests(unittest.TestCase):
             verify_candidate(self.candidate, trusted_manifest_sha256=digest)
 
     def test_unexpected_root_artifact_blocks_release(self):
-        digest = self.stage()
+        digest = self.stage(mutable=True)
         (self.candidate / "untrusted.cfg").write_bytes(b"danger")
         with self.assertRaises(CandidateIntegrityError):
             verify_candidate(self.candidate, trusted_manifest_sha256=digest)
 
     def test_disallows_overwriting_existing_bundle(self):
-        digest = self.stage()
+        source = self.synthetic_source()
+        digest = make_candidate(source, self.candidate)
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
         before = (self.candidate / MANIFEST).read_bytes()
         with self.assertRaises(FileExistsError):
-            make_candidate(self.source, self.candidate)
+            make_candidate(source, self.candidate)
         self.assertEqual((self.candidate / MANIFEST).read_bytes(), before)
         self.assertTrue(verify_candidate(
             self.candidate, trusted_manifest_sha256=digest))
 
     def test_source_new_python_file_is_fail_closed(self):
-        alternative = self.home / "source"
-        shutil.copytree(self.source, alternative, ignore=shutil.ignore_patterns("__pycache__"))
+        alternative = self.synthetic_source()
         (alternative / "unexpected.py").write_bytes(b"NEW")
         with self.assertRaises(CandidateIntegrityError):
             make_candidate(alternative, self.candidate)
         self.assertFalse(self.candidate.exists())
 
     def test_source_missing_module_is_fail_closed(self):
-        alternative = self.home / "source"
-        shutil.copytree(self.source, alternative, ignore=shutil.ignore_patterns("__pycache__"))
+        alternative = self.synthetic_source()
         (alternative / "owner_approval_broker.py").unlink()
         with self.assertRaises(CandidateIntegrityError):
             make_candidate(alternative, self.candidate)
         self.assertFalse(self.candidate.exists())
 
     def test_manifest_path_escape_rejected_even_if_hash_supplied(self):
-        self.stage()
+        self.stage(mutable=True)
         path = self.candidate / MANIFEST
         content = json.loads(path.read_text("ascii"))
         content["files"][0]["path"] = "../outside.py"
@@ -148,7 +175,7 @@ class Phase9FCandidateTests(unittest.TestCase):
             verify_candidate(self.candidate, trusted_manifest_sha256=forged_hash)
 
     def test_manifest_duplicate_keys_rejected(self):
-        self.stage()
+        self.stage(mutable=True)
         path=self.candidate / MANIFEST
         data=path.read_bytes()
         # Repeat "format" explicitly, supplying the computed forged digest.
@@ -158,7 +185,7 @@ class Phase9FCandidateTests(unittest.TestCase):
             verify_candidate(self.candidate, trusted_manifest_sha256=hashlib.sha256(forged).hexdigest())
 
     def test_manifest_wrong_record_size_rejected(self):
-        self.stage()
+        self.stage(mutable=True)
         path=self.candidate / MANIFEST
         content=json.loads(path.read_text("ascii"))
         content["files"][0]["bytes"]=-1
@@ -168,7 +195,7 @@ class Phase9FCandidateTests(unittest.TestCase):
             verify_candidate(self.candidate, trusted_manifest_sha256=hashlib.sha256(forged).hexdigest())
 
     def test_optional_windows_symlink_is_rejected(self):
-        digest = self.stage()
+        digest = self.stage(mutable=True)
         target = self.candidate / PACKAGE / "owner_approval_broker.py"
         copy = self.home / "original.py"
         copy.write_bytes(target.read_bytes())
@@ -196,7 +223,8 @@ class Phase9FCandidateTests(unittest.TestCase):
                   "print('STAGED_HOST_IMPORT_DENY_ONLY_PASS')")
         proc=subprocess.run(
             [sys.executable,"-I","-S","-B","-c",script,str(self.candidate)],
-            cwd=str(self.home),capture_output=True,text=True,timeout=10)
+            cwd=str(self.home),capture_output=True,text=True,timeout=10,
+            env={**os.environ, "USERPROFILE": str(self.home), "LOCALAPPDATA": str(self.home)})
         self.assertEqual(proc.returncode,0,proc.stderr)
         self.assertIn("STAGED_HOST_IMPORT_DENY_ONLY_PASS",proc.stdout)
         self.assertTrue(verify_candidate(

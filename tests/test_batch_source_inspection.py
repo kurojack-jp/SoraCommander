@@ -1,13 +1,17 @@
 """Read-only multi-file source inspection and existing-file comparison."""
 import asyncio
+import stat
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from tests._inherited_test_temp import inherited_test_temp
 from tests._mock_read_boundary import mock_read_boundary
 import unittest
 
 from sora_commander_next.file_reads import (
-    ReadBoundaryError, compare_text_files, read_many_text_files,
+    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_RECALL_ON_OPEN,
+    ReadBoundaryError, compare_text_files, read_many_text_files, read_text_file,
 )
 from sora_commander_next.host import Host
 from sora_commander_next.policy import Policy
@@ -92,6 +96,29 @@ class BatchSourceTests(unittest.TestCase):
         self.assertEqual(self.after.read_bytes(),proposed)
         self.assertFalse(compare_text_files(str(self.before),str(self.before),
                                              (str(self.root),))["changed"])
+
+    def test_batch_and_comparison_skip_files_that_require_recall(self):
+        original_lstat = Path.lstat
+        original_open = Path.open
+        scope = (str(self.root),)
+        for attributes in (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_RECALL_ON_OPEN,
+                           stat.FILE_ATTRIBUTE_OFFLINE):
+            def metadata(path, *args, **kwargs):
+                if path == self.after:
+                    return SimpleNamespace(st_mode=stat.S_IFREG, st_nlink=1,
+                                           st_file_attributes=attributes)
+                return original_lstat(path, *args, **kwargs)
+
+            with self.subTest(attributes=attributes), patch.object(Path, "lstat", metadata), \
+                    patch.object(Path, "open", autospec=True, side_effect=original_open) as opened:
+                with self.assertRaisesRegex(ReadBoundaryError, "requires recall"):
+                    read_many_text_files([str(self.before), str(self.after)], scope)
+                self.assertNotIn(self.after, [call.args[0] for call in opened.call_args_list])
+                opened.reset_mock()
+                with self.assertRaisesRegex(ReadBoundaryError, "requires recall"):
+                    compare_text_files(str(self.before), str(self.after), scope)
+                opened.assert_not_called()
+                self.assertIn("TWO", read_text_file(str(self.after), scope)["content"])
 
     def test_invalid_batch_and_diff_are_fail_closed(self):
         bad_batches=([],[str(self.before)]*2,

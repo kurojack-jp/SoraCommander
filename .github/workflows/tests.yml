@@ -1,0 +1,58 @@
+name: Windows tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Install public dependencies
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m pip install "mcp>=1,<2" "pydantic>=2,<3" "pywin32>=306"
+          exit $LASTEXITCODE
+      - name: Run the public test modules with the dialog guard
+        run: |
+          $entries = @(Get-Content -LiteralPath 'docs/public_release/tests.txt' |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') })
+          foreach ($entry in $entries) {
+            if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+              throw "Missing public manifest entry: $entry"
+            }
+          }
+          $modules = @($entries |
+            Where-Object { $_ -cmatch '^tests/test_[A-Za-z0-9_]+\.py$' } |
+            ForEach-Object { $_.Replace('/', '.') -replace '\.py$', '' })
+          if ($modules.Count -eq 0 -or $modules.Count -ne @($modules | Sort-Object -Unique).Count) {
+            throw 'The public test module list is empty or contains duplicates.'
+          }
+          $shippedModules = @(Get-ChildItem -LiteralPath tests -File -Filter 'test_*.py' |
+            ForEach-Object { 'tests.' + $_.BaseName })
+          if ($shippedModules.Count -eq 0 -or (Compare-Object $modules $shippedModules)) {
+            throw 'Public test modules differ from the manifest.'
+          }
+          $scratch = New-Item -Path (Join-Path $PWD 'temp') -ItemType Directory
+          $profileFixture = New-Item -Path (Join-Path $scratch.FullName 'ci-profile') -ItemType Directory
+          $appDataFixture = New-Item -Path (Join-Path $profileFixture.FullName 'LocalAppData') -ItemType Directory
+          $env:USERPROFILE = $profileFixture.FullName
+          $env:LOCALAPPDATA = $appDataFixture.FullName
+          $env:PYTHONPATH = 'src;.'
+          .\.venv\Scripts\python.exe -B tests\run_with_real_dialog_guard.py @modules
+          exit $LASTEXITCODE

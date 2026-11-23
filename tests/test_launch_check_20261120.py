@@ -237,6 +237,8 @@ class PublicLauncherTests(unittest.TestCase):
             "start-broker-mode.cmd", "install-broker-autostart.cmd", "uninstall-broker-autostart.cmd",
             "start-owner-broker-dev.cmd", "start-sora-commander-broker-dev.cmd",
             "start-sora-commander-local.cmd", "setup.cmd", "update.cmd", "start-muse-bridge.cmd",
+            "start-broker.cmd", "start-broker-tunnel.cmd", "start-usual-mode.cmd",
+            "mcp-broker-client.cmd", "mcp-direct.cmd",
             "start-muse-bridge-tailscale.cmd", "install-muse-bridge-autostart.cmd",
             "uninstall-muse-bridge-autostart.cmd",
         }
@@ -265,6 +267,8 @@ class AutostartLauncherVenvTests(unittest.TestCase):
                     result = subprocess.run(
                         [os.path.join(os.environ["SystemRoot"], "System32", "cmd.exe"), "/d", "/c", ".\\" + name],
                         cwd=tools, capture_output=True, text=True, timeout=30,
+                        env={**os.environ, "USERPROFILE": str(tools / "profile"),
+                             "LOCALAPPDATA": str(tools / "local")},
                         stdin=subprocess.DEVNULL)
                     self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                     self.assertIn(r"[HOLD] Run tools\setup.cmd first (.venv is missing).", result.stdout)

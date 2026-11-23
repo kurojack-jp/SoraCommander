@@ -3,10 +3,7 @@
 from contextlib import redirect_stdout
 import io
 import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -69,6 +66,7 @@ class DigestTests(unittest.IsolatedAsyncioTestCase):
     async def test_git_errors_and_activity_errors_keep_remaining_sections(self):
         server = self.build_digest()
         for failure, code in ((ReadBoundaryError("GIT_TIMEOUT"), "GIT_TIMEOUT"),
+                              (ReadBoundaryError("sensitive path excluded"), "PATH_NOT_ALLOWED"),
                               (RuntimeError("synthetic private path"), "GIT_FAILED")):
             with self.subTest(code=code), patch.object(git, "git_snapshot", side_effect=failure), \
                     patch.object(activity, "observe", return_value={"status": "ERROR"}):
@@ -106,38 +104,29 @@ class DigestTests(unittest.IsolatedAsyncioTestCase):
         with inherited_test_temp() as folder, canonical_fixture_admission() as admit:
             repo = Path(folder) / "digest-repo"
             repo.mkdir()
-            try:
-                await self.check_repository(repo, admit)
-            finally:
-                if not isinstance(sys.exception(), PermissionError):
-                    # Git loose objects can carry the Windows read-only bit.
-                    for item in (repo / ".git" / "objects").glob("[0-9a-f][0-9a-f]/*"):
-                        if item.is_file() and not item.is_symlink():
-                            os.chmod(item, 0o666)
+            await self.check_repository(repo, admit)
 
     async def check_repository(self, repo, admit):
         outside = repo.parent / "outside"
         outside.mkdir()
-        exe = git.fixed_git()
+        commits = [(str(number) * 40, f"Synthetic digest commit {number}")
+                   for number in (4, 3, 2)]
+        replies = {
+            ("rev-parse", "--show-toplevel"): str(repo) + "\n",
+            ("status", "--porcelain=v2", "--branch", "--untracked-files=all"):
+                f"# branch.oid {commits[0][0]}\n# branch.head digest-trial\n"
+                f"1 .M N... 100644 100644 100644 {_SHA} {_SHA} note.txt\n? untracked.txt\n",
+            ("log", *git.DIFF_OPTIONS, "--oneline", "-n", "10"):
+                "".join(f"{sha[:7]} {subject}\n" for sha, subject in commits),
+            ("log", *git.DIFF_OPTIONS, "-n3", "--format=%H%x09%an%x09%ad%x09%s", "--date=iso-strict", "--"):
+                "".join(f"{sha}\tSynthetic Author\t{_DATE}\t{subject}\n" for sha, subject in commits),
+        }
 
-        def run(*args):
-            result = subprocess.run([str(exe), *git.OPTIONS, *args], cwd=repo,
-                                    env=git.safe_env(exe), capture_output=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        def run(cwd, args):
+            self.assertEqual(cwd, repo)
+            return replies[tuple(args)].encode("utf-8")
 
-        with patch.object(git, "_check", side_effect=admit):
-            run("init", "-b", "digest-trial")
-            run("config", "user.name", "Synthetic Author")
-            run("config", "user.email", "synthetic@example.invalid")
-            tracked = repo / "note.txt"
-            tracked.write_text("initial\n", encoding="utf-8")
-            run("add", "--", "note.txt")
-            run("commit", "-m", "Synthetic digest initial")
-            for number in (2, 3, 4):
-                run("commit", "--allow-empty", "-m", f"Synthetic digest commit {number}")
-            tracked.write_text("changed\n", encoding="utf-8")
-            (repo / "untracked.txt").write_text("synthetic\n", encoding="utf-8")
-
+        with patch.object(git, "_check", side_effect=admit), patch.object(git, "_run", side_effect=run) as commands:
             server = self.build_digest(repo, (str(repo),))
             digest = await _call(server, "bridge_digest")
             status = await _call(server, "status")
@@ -159,10 +148,12 @@ class DigestTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(digest["git"]["log"], [
                 {"sha": sha, "date": date, "subject": subject} for sha, _, date, subject in expected
             ])
+            commands.reset_mock()
             refused = await _call(self.build_digest(outside, (str(repo),)), "bridge_digest")
-            self.assertEqual(refused["git"], {"error": "PATH_NOT_ALLOWED"})
+            self.assertEqual(refused["git"], {"error": "CHECKOUT_NOT_IN_READ_ROOTS"})
             self.assertEqual(refused["status"], digest["status"])
             self.assertEqual(refused["activity"], digest["activity"])
+            commands.assert_not_called()
             print("MUSE_DIGEST_SYNTHETIC_REPLY", json.dumps(digest, ensure_ascii=False), flush=True)
 
 

@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "scn_tunnel_key.py"
 PS_WRAPPER = ROOT / "tools" / "Set-NextTunnelKey.ps1"
 CMD_WRAPPER = ROOT / "tools" / "set-tunnel-key.cmd"
-LAUNCHER = ROOT / "tools" / "start-sora-commander-local.cmd"
+LAUNCHER = ROOT / "tools" / "start-usual-mode.cmd"
 SELECTOR = ROOT / "tools" / "scn_tunnel_client.py"
 LAUNCH_CHECK = ROOT / "tools" / "scn_launch_check.py"
 PS = Path(os.environ.get("SystemRoot", "")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -56,7 +56,7 @@ class TunnelKeyFileTests(unittest.TestCase):
         self.executable.parent.mkdir(parents=True)
         for source in (TOOL, PS_WRAPPER, CMD_WRAPPER, LAUNCHER, SELECTOR, LAUNCH_CHECK):
             shutil.copyfile(source, tools / source.name)
-        (tools / "next-development.cmd").write_text("TEST DATA ONLY",
+        (tools / "mcp-direct.cmd").write_text("TEST DATA ONLY",
                                                     encoding="ascii")
         self.executable.write_text("TEST DATA ONLY", encoding="ascii")
         self.launcher_copy = tools / LAUNCHER.name
@@ -129,10 +129,7 @@ class TunnelKeyFileTests(unittest.TestCase):
     def test_invalid_input_never_writes_a_file(self):
         for text in ("", "short", "two words here", KEY + "\n" + KEY):
             with self.subTest(length=len(text)):
-                result = self.tool("--from-stdin", stdin=text)
-                self.assertEqual(result.returncode, 5,
-                                 result.stdout + result.stderr)
-                self.assert_no_key(result)
+                self.assertEqual(self.invoke(["--from-stdin"], text.encode("ascii")), 5)
                 self.assertFalse(self.key_file.exists())
 
     def test_invalid_input_keeps_an_existing_key(self):
@@ -150,10 +147,7 @@ class TunnelKeyFileTests(unittest.TestCase):
                            ("large", b"A" * 8193)):
             with self.subTest(name=name):
                 self.write_key(data)
-                result = self.tool("--check")
-                self.assertEqual(result.returncode, 5,
-                                 result.stdout + result.stderr)
-                self.assert_no_key(result)
+                self.assertEqual(self.invoke(["--check"]), 5)
 
     def test_hand_written_clean_file_is_accepted(self):
         self.write_key(KEY.encode("ascii"))

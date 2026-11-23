@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from sora_commander_next import owner_journal_lease
+from sora_commander_next import git_readonly, owner_journal_lease
 from tools import scn_update
 
 
@@ -41,12 +41,18 @@ class UpdateHelperTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {
             "USERPROFILE": "synthetic-profile", "LOCALAPPDATA": "synthetic-appdata",
+            "PATH": "synthetic-path-with-git",
         }, clear=True))
         self.root = Path("checkout")
         self.output = io.StringIO()
         self.commands = []
         self.old = "a" * 40
         self.new = "b" * 40
+        self.tag_object = "c" * 40
+        self.tag_ref = "refs/tags/v1.11.0"
+        self.git_executable = Path.cwd() / "synthetic-program-files" / "Git" / "cmd" / "git.exe"
+        self.find_git = self.enterContext(patch.object(
+            scn_update, "fixed_git", return_value=self.git_executable))
         self.replies = {
             ("rev-parse", "--show-prefix"): "",
             ("rev-parse", "--is-inside-work-tree"): "true",
@@ -59,16 +65,19 @@ class UpdateHelperTests(unittest.TestCase):
             ("ls-files", "-v"): "H tracked.py",
             ("status", "--porcelain=v1", "-uall", "--ignore-submodules=none"): "",
             ("fetch", "--tags", "--no-auto-maintenance", "origin"): "",
-            ("describe", "--tags", "--abbrev=0", "HEAD"): "v1.2.0",
-            ("tag", "--merged", "refs/remotes/origin/main",
-             "--format=%(objecttype) %(refname:strip=2)"):
+            ("tag", "--format=%(objecttype) %(refname:strip=2)"):
                 "tag v1.2.0\ntag v1.11.0\ntag v1.9.0\ncommit v99.0.0\ntag latest",
             ("rev-parse", "HEAD"): self.old,
-            ("rev-parse", "refs/remotes/origin/main"): self.new,
+            ("rev-parse", "--verify", self.tag_ref): self.tag_object,
+            ("ls-remote", "--exit-code", "--refs", "origin", self.tag_ref):
+                f"{self.tag_object}\t{self.tag_ref}",
+            ("rev-parse", "--verify", f"{self.tag_object}^{{commit}}"): self.new,
+            ("merge-base", "--is-ancestor", self.new, "refs/remotes/origin/main"): "",
+            ("merge-base", "--is-ancestor", self.new, self.old): (1, ""),
             ("merge-base", "--is-ancestor", self.old, self.new): "",
-            ("tag", "--merged", "refs/remotes/origin/main", "--no-merged", "HEAD"):
+            ("tag", "--merged", self.new, "--no-merged", "HEAD"):
                 "v1.9.0\nv1.11.0\nv99.0.0",
-            ("merge", "--ff-only", "--no-overwrite-ignore", "origin/main"): "",
+            ("merge", "--ff-only", "--no-overwrite-ignore", self.new): "",
         }
         self.processes = [{
             "Name": "explorer.exe", "ProcessId": 17,
@@ -81,12 +90,12 @@ class UpdateHelperTests(unittest.TestCase):
         self.numeric_state = self.enterContext(patch.object(scn_update, "_task_state"))
         self.lease = self.enterContext(patch.object(
             owner_journal_lease, "owner_journal_lease", side_effect=nullcontext))
-        self.enterContext(patch.object(scn_update.subprocess, "run", side_effect=self.fake_run))
+        self.run = self.enterContext(patch.object(scn_update.subprocess, "run", side_effect=self.fake_run))
 
     def fake_run(self, argv, **kwargs):
         self.assertEqual(kwargs["cwd"], self.root)
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
-        if argv[0] == "git":
+        if argv[0] == str(self.git_executable):
             args = tuple(argv[1 + len(scn_update.GIT_OPTIONS):])
             self.commands.append(args)
             reply = self.replies[args]
@@ -223,6 +232,25 @@ class UpdateHelperTests(unittest.TestCase):
                 self.assertEqual(self.invoke(), 2)
                 self.assertEqual(self.mutations(), [])
 
+    def test_new_and_legacy_batch_entry_points_hold_without_fetch_or_merge(self):
+        for launcher in (
+            "start-broker.cmd", "start-broker-tunnel.cmd", "start-usual-mode.cmd",
+            "mcp-broker-client.cmd", "mcp-direct.cmd",
+            "start-owner-broker-dev.cmd", "start-sora-commander-broker-dev.cmd",
+            "start-sora-commander-local.cmd", "next-development-broker-client.cmd",
+            "next-development.cmd",
+        ):
+            with self.subTest(launcher=launcher):
+                self.processes[-1] = {
+                    "Name": "cmd.exe", "ProcessId": 25,
+                    "ExecutablePath": None, "CommandLine": f'cmd.exe /d /c "tools/{launcher.upper()}"',
+                }
+                self.assertEqual(self.invoke(), 2)
+                self.assertEqual(self.mutations(), [])
+        self.processes[-1]["CommandLine"] = "cmd.exe /d /c tools/mcp-direct.cmd.bak"
+        self.assertEqual(self.invoke("--check"), 0)
+        self.assertEqual(self.mutations(), ["fetch"])
+
     def test_either_running_task_holds_without_merge(self):
         for name in scn_update.LOGON_TASKS:
             with self.subTest(task=name):
@@ -240,15 +268,21 @@ class UpdateHelperTests(unittest.TestCase):
         self.assertIn("Owner journal is held", self.output.getvalue())
 
     def test_already_current(self):
-        self.replies[("rev-parse", "refs/remotes/origin/main")] = self.old
+        self.replies[("rev-parse", "HEAD")] = self.new
         self.assertEqual(self.invoke(), 0)
         self.assertEqual(self.mutations(), ["fetch", "setup"])
         self.assertIn("Already current", self.output.getvalue())
 
+    def test_head_already_contains_release(self):
+        self.replies[("merge-base", "--is-ancestor", self.new, self.old)] = ""
+        self.assertEqual(self.invoke("--check"), 0)
+        self.assertEqual(self.mutations(), ["fetch"])
+        self.assertIn("No update needed for v1.11.0", self.output.getvalue())
+
     def test_already_current_keeps_dependency_hold_on_rerun(self):
         self.setup_result = 2
         self.assertEqual(self.invoke(), 2)
-        self.replies[("rev-parse", "refs/remotes/origin/main")] = self.old
+        self.replies[("rev-parse", "HEAD")] = self.new
         self.commands.clear()
         self.assertEqual(self.invoke(), 2)
         self.assertEqual(self.mutations(), ["fetch", "setup"])
@@ -267,16 +301,59 @@ class UpdateHelperTests(unittest.TestCase):
         self.replies[("merge-base", "--is-ancestor", self.old, self.new)] = (1, "")
         self.assertEqual(self.invoke(), 2)
         self.assertEqual(self.mutations(), ["fetch"])
-        self.assertIn("local commits on main; update by hand", self.output.getvalue())
+        self.assertIn("Local main cannot fast-forward to v1.11.0", self.output.getvalue())
+
+    def test_latest_tag_outside_origin_main_holds(self):
+        self.replies[("merge-base", "--is-ancestor", self.new, "refs/remotes/origin/main")] = (1, "")
+        self.assertEqual(self.invoke(), 2)
+        self.assertEqual(self.mutations(), ["fetch"])
+        self.assertIn("[HOLD] Release tag v1.11.0 is not reachable from origin/main.",
+                      self.output.getvalue())
+
+    def test_tag_differing_from_official_origin_holds(self):
+        self.replies[("ls-remote", "--exit-code", "--refs", "origin", self.tag_ref)] = (
+            f"{self.old}\t{self.tag_ref}")
+        self.assertEqual(self.invoke(), 2)
+        self.assertEqual(self.mutations(), ["fetch"])
+        self.assertIn("[HOLD] Release tag v1.11.0 differs from the official HTTPS origin.",
+                      self.output.getvalue())
+
+    def test_missing_fixed_git_ignores_path_and_prints_one_hold(self):
+        self.find_git.side_effect = git_readonly.fixed_git.__wrapped__
+        self.assertEqual(self.invoke(), 2)
+        self.assertEqual(self.output.getvalue().splitlines(), [
+            "[HOLD] Install Git for Windows in its default folder.",
+        ])
+        self.run.assert_not_called()
+
+    def test_linked_fixed_git_holds_without_launching_git(self):
+        self.find_git.side_effect = git_readonly.fixed_git.__wrapped__
+        install, candidate = Mock(), Mock()
+        install.__truediv__ = Mock(return_value=candidate)
+        candidate.__truediv__ = Mock(return_value=candidate)
+        candidate.parents = ()
+        candidate.lstat.return_value = SimpleNamespace(st_file_attributes=0x400)
+        candidate.is_symlink.return_value = False
+        with (patch.dict(os.environ, {"ProgramFiles": "synthetic-install"}),
+              patch.object(git_readonly, "Path", return_value=install)):
+            self.assertEqual(self.invoke(), 2)
+        self.assertEqual(self.output.getvalue().splitlines(), [
+            "[HOLD] Git for Windows installation refused (GIT_INSTALL_LINK).",
+        ])
+        self.run.assert_not_called()
 
     def test_failed_merge_holds_without_setup(self):
-        self.replies[("merge", "--ff-only", "--no-overwrite-ignore", "origin/main")] = (1, "")
+        self.replies[("merge", "--ff-only", "--no-overwrite-ignore", self.new)] = (1, "")
         self.assertEqual(self.invoke(), 2)
         self.assertEqual(self.mutations(), ["fetch", "merge"])
 
     def test_update_runs_fetch_merge_and_setup_in_order(self):
         self.assertEqual(self.invoke(), 0)
         self.assertEqual(self.mutations(), ["fetch", "merge", "setup"])
+        self.assertIn(("merge", "--ff-only", "--no-overwrite-ignore", self.new), self.commands)
+        self.assertIn("Fast-forwarded main to release v1.11.0", self.output.getvalue())
+        self.assertIn(r"tools\start-broker-mode.cmd or its logon task", self.output.getvalue())
+        self.assertIn(r"tools\start-usual-mode.cmd", self.output.getvalue())
         self.assertIn("Refresh tools in ChatGPT and Muse", self.output.getvalue())
 
     def test_missing_packages_hold_after_merge(self):

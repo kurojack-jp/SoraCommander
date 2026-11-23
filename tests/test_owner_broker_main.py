@@ -166,8 +166,9 @@ class OwnerBrokerMainTests(unittest.TestCase):
 
     def test_client_offers_the_full_tool_list(self):
         from sora_commander_next.mcp_adapter import _local_registered_catalog
+        # The five DEV write tools are off unless dev-write-tools.txt says on.
         self.assertEqual(_local_registered_catalog(self.server, self.host)
-                         ["registered_tool_count"], 54)
+                         ["registered_tool_count"], 49)
 
     def test_status_comes_from_the_real_host_in_the_broker(self):
         status = self.call("status")
@@ -242,6 +243,8 @@ class OwnerBrokerMainTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
 class BrokerModeStopTests(unittest.TestCase):
+    WAIT_SECONDS = 1
+
     def setUp(self):
         checkout = Path(self.enterContext(inherited_test_temp()))
         self.home = checkout / "tools"
@@ -256,8 +259,8 @@ class BrokerModeStopTests(unittest.TestCase):
         check = check.replace('"soracommandernext-broker-"', repr(self.prefix.casefold()))
         check = check.replace('"tunnel-client.exe"', repr(self.prefix.casefold() + ".exe"))
         (self.home / "scn_launch_check.py").write_text(check, encoding="utf-8")
-        for name, marker in (("start-owner-broker-dev.cmd", "broker-called"),
-                             ("start-sora-commander-broker-dev.cmd", "tunnel-called")):
+        for name, marker in (("start-broker.cmd", "broker-called"),
+                             ("start-broker-tunnel.cmd", "tunnel-called")):
             (self.home / name).write_bytes(
                 f'@echo off\r\n>"%~dp0{marker}" echo called\r\nexit /b 0\r\n'.encode("ascii"))
 
@@ -273,10 +276,14 @@ class BrokerModeStopTests(unittest.TestCase):
         return result, time.monotonic() - started
 
     def test_unresponsive_broker_stops_without_starting_tunnel(self):
+        launcher = self.launcher.read_bytes()
+        self.assertEqual(launcher.count(b"--wait-broker 30"), 1)
+        self.launcher.write_bytes(launcher.replace(
+            b"--wait-broker 30", f"--wait-broker {self.WAIT_SECONDS}".encode("ascii")))
         result, elapsed = self.run_launcher()
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
         self.assertIn("[HOLD] The Broker pipe was not ready within 30 seconds.", result.stdout)
-        self.assertGreaterEqual(elapsed, 30)
+        self.assertGreaterEqual(elapsed, self.WAIT_SECONDS)
         self.assertTrue((self.home / "broker-called").is_file())
         self.assertFalse((self.home / "tunnel-called").exists())
 
@@ -294,7 +301,7 @@ class BrokerModeStopTests(unittest.TestCase):
                 self.assertFalse((self.home / "tunnel-called").exists())
 
     def test_check_only_propagates_child_error(self):
-        (self.home / "start-owner-broker-dev.cmd").write_bytes(b"@exit /b 2\r\n")
+        (self.home / "start-broker.cmd").write_bytes(b"@exit /b 2\r\n")
         result, _ = self.run_launcher("--check")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertFalse((self.home / "tunnel-called").exists())
@@ -329,7 +336,7 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
         return (ROOT / "tools" / name).read_text(encoding="utf-8")
 
     def test_broker_launcher_holds_while_a_tunnel_runs_and_has_no_key(self):
-        text = self.text("start-owner-broker-dev.cmd")
+        text = self.text("start-broker.cmd")
         self.assertIn("--tunnel-absent", text)
         self.assertIn('set "CONTROL_PLANE_API_KEY="', text)
         self.assertNotIn("Watch-NextTunnel", text)
@@ -337,7 +344,7 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
         self.assertIn('if /I not "%~1"=="--check" pause', text)
 
     def test_tunnel_launcher_only_replaces_the_mcp_command(self):
-        text = self.text("start-sora-commander-broker-dev.cmd")
+        text = self.text("start-broker-tunnel.cmd")
         self.assertIn('--control-plane.api-key "%KEYREF%"', text)
         self.assertIn('--mcp.command "cmd.exe /d /c %MCP_FORWARD%"', text)
         self.assertIn('set "CONTROL_PLANE_API_KEY="', text)
@@ -345,7 +352,7 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
         self.assertNotIn("Watch-NextTunnel", text)
 
     def test_client_launcher_starts_no_broker_and_sets_no_review_or_journal(self):
-        text = self.text("next-development-broker-client.cmd")
+        text = self.text("mcp-broker-client.cmd")
         self.assertIn("sora_commander_next.owner_broker_client_main", text)
         self.assertNotIn("owner_broker_main", text)
         for name in ("REVIEW_PILOT", "JOURNAL_PILOT", "RESULT_ARCHIVE_PILOT"):
@@ -355,8 +362,8 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
         def switches(name):
             return {line.strip() for line in self.text(name).splitlines()
                     if line.startswith('set "SORA_NEXT_')}
-        self.assertEqual(switches("start-owner-broker-dev.cmd"),
-                         switches("next-development.cmd"))
+        self.assertEqual(switches("start-broker.cmd"),
+                         switches("mcp-direct.cmd"))
 
     def test_one_step_launcher_starts_the_broker_first_and_waits_for_its_pipe(self):
         text = self.text("start-broker-mode.cmd")
@@ -379,14 +386,14 @@ class OwnerBrokerLauncherTests(unittest.TestCase):
         self.assertFalse("SoraCommanderNext-Test-x".startswith("SoraCommanderNext-Broker-"))
 
     def test_launchers_use_windows_line_endings(self):
-        for name in ("start-owner-broker-dev.cmd", "start-sora-commander-broker-dev.cmd",
-                     "next-development-broker-client.cmd", "start-broker-mode.cmd"):
+        for name in ("start-broker.cmd", "start-broker-tunnel.cmd",
+                     "mcp-broker-client.cmd", "start-broker-mode.cmd"):
             with self.subTest(name=name):
                 data = (ROOT / "tools" / name).read_bytes()
                 self.assertEqual(data.count(b"\n"), data.count(b"\r\n"))
 
     def test_live_launchers_are_unchanged_by_this_mode(self):
-        for name in ("next-development.cmd", "start-sora-commander-local.cmd"):
+        for name in ("mcp-direct.cmd", "start-usual-mode.cmd"):
             self.assertNotIn("owner_broker", self.text(name))
 
 
