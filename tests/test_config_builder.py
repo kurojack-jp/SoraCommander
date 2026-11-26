@@ -168,6 +168,46 @@ class InMemoryContractTests(unittest.TestCase):
         editor.roots_enabled.set.assert_called_once_with(True)
         editor.update_roots.assert_called_once_with()
 
+    def test_skipped_root_is_a_localized_warning_and_does_not_block_save(self):
+        contents = dict.fromkeys(model.NAMES)
+        contents[model.NAMES[0]] = f"{EXAMPLE}\nread: {EXAMPLE.with_name('private-missing')}".encode()
+        editor = self.editor()
+        editor.contents, editor.root, editor.environ = contents, ROOT, ENV
+        editor.form_dirty, editor.locale, editor.status = False, "ja", Mock()
+        editor.baseline = {name: model.FileRecord(None, None) for name in model.NAMES}
+        editor.ack, editor.save_button, editor.preview = Mock(), Mock(), Mock()
+        editor.show = Mock()
+        editor.capture_tasks = Mock()
+
+        def inspect(path, **_):
+            if path.name == "private-missing":
+                raise model.allowed_roots._MissingFolder(path)
+            return path
+
+        with patch.object(model.allowed_roots, "_plain_path", side_effect=inspect), \
+                patch.object(model, "validate_candidate", wraps=model.validate_candidate) as validate:
+            editor.review()
+        validate.assert_called_once()
+        shown = editor.show.call_args_list[0].args[1]
+        self.assertIn("[WARN] allowed-roots.txt: 2行目（0はファイル全体）: フォルダがありません。", shown)
+        self.assertNotIn("private-missing", shown)
+        self.assertEqual(editor.reviewed, contents)
+        editor.ack.get.return_value = True
+        editor.enable_save()
+        editor.save_button.configure.assert_called_with(state="normal")
+
+        contents[model.NAMES[0]] = f"{EXAMPLE}\nread: {EXAMPLE / 'private-missing'}".encode()
+        editor.show.reset_mock()
+        with patch.object(model.allowed_roots, "_plain_path", side_effect=inspect):
+            editor.review()
+        shown = editor.show.call_args_list[0].args[1]
+        self.assertIn("[HOLD] allowed-roots.txt: 2行目（0はファイル全体）: "
+                      "フルと読むだけのフォルダが同じ、または親子になっています。", shown)
+        self.assertNotIn("private-missing", shown)
+        self.assertIsNone(editor.reviewed)
+        editor.enable_save()
+        editor.save_button.configure.assert_called_with(state="disabled")
+
     def test_full_access_requires_explicit_confirmation(self):
         for approved in (False, True):
             with self.subTest(approved=approved):

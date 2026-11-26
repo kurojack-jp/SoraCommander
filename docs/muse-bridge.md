@@ -106,6 +106,7 @@ StableID from `muse-bridge-peers.json`, then restart the bridge.
 | The agent has no `run_command`, `run_task` or other command tool | Expected: the read-only bridge does not list command tools, and a call by name is refused without running anything | Nothing; use the read tools |
 | `[HOLD] allowed-roots.txt is missing` | The read-only bridge requires an explicit folder list | Create `allowed-roots.txt`, list the folders to serve, and restart the bridge |
 | `[HOLD] allowed-roots.txt: allowed-roots line N: ...` | Line N of the folder list is invalid | Fix that line by hand and restart the bridge |
+| `[WARN] allowed-roots line N: folder does not exist; skipped until the next start` | Line N names a folder that does not exist. Startup uses the other usable folders | Create the folder and restart the bridge to include it |
 | `[HOLD] muse-bridge-peers.json still has the example ID` | The example StableID was not replaced | Put the agent's own StableID in `readonly` |
 | `GIT_NOT_INSTALLED` in `bridge_digest` | Git for Windows is not in `C:\Program Files\Git` | Install Git in its default folder |
 | `CHECKOUT_NOT_IN_READ_ROOTS` in `bridge_digest` | Your read folders do not contain the checkout | Add the checkout to `allowed-roots.txt` if you want its Git summary |

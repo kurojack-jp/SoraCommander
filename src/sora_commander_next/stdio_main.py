@@ -1,8 +1,8 @@
 """Stdio MCP entrypoint; deny-only by default, explicit Owner review pilot opt-in."""
 
 from .host import Host
-from .mcp_adapter import serve_stdio
-from .allowed_roots import AllowedRootsError, startup_allowed_roots
+from .mcp_adapter import serve_stdio, startup_vm_config
+from .allowed_roots import AllowedRootsError, startup_allowed_roots, warn_skipped_roots
 from .owner_storage import ensure_owner_storage
 
 
@@ -85,12 +85,16 @@ def main():
     import sys
     from functools import partial
     from .owner_ui_language import DevWriteToolsError, resolve_dev_write_tools
+    vm_config = startup_vm_config(
+        dev_host=os.environ.get("SORA_NEXT_OWNER_REVIEW_PILOT") == "1")
     try:
         enabled = resolve_dev_write_tools()
     except DevWriteToolsError as error:
         print(f"[HOLD] dev-write-tools.txt: {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
     serve = partial(serve_stdio, dev_write_tools_enabled=True) if enabled else serve_stdio
+    if vm_config is not None:
+        serve = partial(serve, vm_config=vm_config)
     if os.environ.get("SORA_NEXT_PRODUCT_BROKER") == "1":
         # Product selection never falls through to the legacy execution/GUI
         # pilots, even when the Broker is unavailable or construction fails.
@@ -146,6 +150,7 @@ def build_owner_pilot_host(repo_root=None, *, environ=None, profile=None,
         import sys
         print(f"[HOLD] {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
+    warn_skipped_roots(roots)
     from .owner_ui_language import OwnerLanguageError, owner_ui_language
     try:
         language = owner_ui_language()

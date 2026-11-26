@@ -2,6 +2,13 @@
 
 Each section gives the tool count at the release it describes.
 
+## v0.7.0
+
+Developer preview with optional Hyper-V VM screen control and file transfer. The bundled launchers register 49 tools, and the VM launchers register 58 with a valid VM configuration and the edit/create pilot on.
+
+- **Optional Hyper-V VM screen control.** Approve a time- and input-limited session to let ChatGPT view and operate a dedicated offline guest and transfer files through configured folders. The VM launchers register 58 tools with a valid VM configuration and the edit/create pilot on. The usual bundled launchers still register 49. [Setup guide](docs/vm-control.md)
+- **Missing allowed folders are skipped with a warning.** The Host and Muse bridge can start with the remaining folders when a folder listed in `allowed-roots.txt` is missing. The setup check and Config Builder report missing folders as well.
+
 ## v0.6.2
 
 Small fixes and a clearer README. The tool count is unchanged (49 with the bundled launchers).

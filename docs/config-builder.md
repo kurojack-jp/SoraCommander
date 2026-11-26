@@ -50,8 +50,8 @@ Core diagnostic reason strings may appear in English.
 py -3.13 -B tools\scn_config_builder.py --check
 ```
 
-Outputs one `[PASS]`, `[WARN]` or `[HOLD]` line per setting. Exit 0 means
-validation completed without HOLD (WARN can mean the default checkout scope).
+Outputs a `[PASS]`, `[WARN]` or `[HOLD]` status per setting and an extra `[WARN]`
+line per skipped folder. Exit 0 means validation completed without HOLD.
 Exit 1 means at least one HOLD. No files, directories, caches or GUI are created.
 It checks actual startup readers and refuses linked/non-ordinary config paths.
 
@@ -75,7 +75,9 @@ It checks actual startup readers and refuses linked/non-ordinary config paths.
   by replacing root entries, selecting a language or editing tasks JSON.
 - Roots and tasks allow UTF-8 BOMs and at most 64 KiB. Language allows 256
   bytes. Same-mode root overlap is permitted by core; cross-mode overlap is
-  rejected. No rules are relaxed by the editor.
+  rejected. The editor warns about folders that do not exist and can save the
+  list if at least one usable entry remains. After creating a skipped folder,
+  restart the processes that use the list to include it.
 - Filesystem-save tests, GUI/device acceptance and non-ASCII-path acceptance
   remain pending. Passing in-memory validation/controller tests does not establish
   that Windows file replacement or the visible GUI has been accepted.

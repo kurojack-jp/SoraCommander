@@ -118,6 +118,9 @@ def validate_candidate(contents, root, environ):
                 detail = f"{len(tasks)} tasks"
             level = "WARN" if name == NAMES[0] and data is None else "PASS"
             results.append((level, name, detail))
+            if name == NAMES[0]:
+                results.extend(("WARN", name, f"allowed-roots line {line}: {allowed_roots.MISSING_FOLDER}")
+                               for line in roots.skipped)
         except (ValueError, OSError, RuntimeError) as error:
             known = isinstance(error, (allowed_roots.AllowedRootsError,
                                       task_presets.TaskPresetError,
@@ -158,6 +161,9 @@ def check_existing(root, environ=None):
                 raise ConfigError("Configuration changed while checking.")
             results.append(("WARN" if name == NAMES[0] and record.data is None else "PASS",
                             name, detail))
+            if name == NAMES[0]:
+                results.extend(("WARN", name, f"allowed-roots line {line}: {allowed_roots.MISSING_FOLDER}")
+                               for line in roots.skipped)
         except (ValueError, OSError, RuntimeError) as error:
             known = isinstance(error, (ConfigError, allowed_roots.AllowedRootsError,
                                       task_presets.TaskPresetError,

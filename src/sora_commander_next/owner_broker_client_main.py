@@ -6,10 +6,10 @@ still work, and commands and writes return UNAVAILABLE.
 import os
 from pathlib import Path
 
-from .mcp_adapter import serve_stdio
+from .mcp_adapter import serve_stdio, startup_vm_config
 from .owner_broker_dev import DevBrokerHost
 from .owner_broker_pipe import OwnerBrokerPipeClient, broker_pipe_name
-from .allowed_roots import AllowedRootsError, startup_allowed_roots
+from .allowed_roots import AllowedRootsError, startup_allowed_roots, warn_skipped_roots
 from .task_presets import TaskPresetError, load_task_presets
 from .ogf_cue import OgfBridgeError, load_ogf_bridge
 from .windows_owner import OwnerSessionGuard
@@ -18,6 +18,7 @@ from .windows_owner import OwnerSessionGuard
 def build_client_host(guard, repo_root, environ, *, pipe_name=None):
     roots = startup_allowed_roots(
         repo_root, environ.get("SORA_NEXT_OWNER_PROFILE", "tests"), environ)
+    warn_skipped_roots(roots)
     task_presets = load_task_presets(environ)
     ogf_bridge = load_ogf_bridge(environ)
     if ogf_bridge is not None:
@@ -38,6 +39,7 @@ def build_client_host(guard, repo_root, environ, *, pipe_name=None):
 def main():
     import sys
     from .owner_ui_language import DevWriteToolsError, resolve_dev_write_tools
+    vm_config = startup_vm_config(dev_host=True)
     try:
         dev_write_tools_enabled = resolve_dev_write_tools()
     except DevWriteToolsError as error:
@@ -57,7 +59,10 @@ def main():
         print(f"[HOLD] tasks.json: {error}", file=sys.stderr, flush=True)
         raise SystemExit(2) from None
     print(f"[INFO] Tasks: {len(host.task_presets)}", file=sys.stderr, flush=True)
-    serve_stdio(host, dev_write_tools_enabled=dev_write_tools_enabled)
+    if vm_config is None:
+        serve_stdio(host, dev_write_tools_enabled=dev_write_tools_enabled)
+    else:
+        serve_stdio(host, dev_write_tools_enabled=dev_write_tools_enabled, vm_config=vm_config)
 
 
 if __name__ == "__main__":

@@ -129,9 +129,16 @@ class EnvironmentCompatibilityTests(unittest.TestCase):
         git = shutil.which("git")
         self.assertIsNotNone(git, "Git required for this compatibility check")
         env = self.filtered_environment()
+        profile = str(ROOT / "tests")
+        env.update(USERPROFILE=profile, LOCALAPPDATA=profile, HOME=profile, XDG_CONFIG_HOME=profile,
+                   GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
         for argv, expected in ((["--version"], b"git version "),
                                (["rev-parse", "--is-inside-work-tree"], b"true")):
             with self.subTest(command=argv[0]):
+                if argv[0] == "rev-parse" and not (ROOT / ".git").exists():
+                    reason = "checkout .git metadata is absent"
+                    print(f"[SKIP] Git repository detection: {reason}")
+                    self.skipTest(reason)
                 result = subprocess.run([git, *argv], cwd=ROOT, env=env,
                                         capture_output=True, timeout=12)
                 self.assertTrue(result.returncode == 0, "Git compatibility check failed")

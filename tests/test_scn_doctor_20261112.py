@@ -79,6 +79,13 @@ class DoctorTests(unittest.TestCase):
             self.assertEqual(self.call(doctor.check_roots)[0], "WARN")
         loader.assert_called_once_with(self.repo, "development", self.env)
 
+    def test_skipped_folder_warns_on_stderr_without_path(self):
+        self.write("allowed-roots.txt", f"{self.repo}\n{self.repo / 'private-missing'}\n")
+        with contextlib.redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(self.call(doctor.check_roots)[0], "WARN")
+        self.assertEqual(output.getvalue(),
+                         "[WARN] allowed-roots line 2: folder does not exist; skipped until the next start\n")
+
     def test_language_pass_fallback_invalid_and_error_verbatim(self):
         with patch("sora_commander_next.owner_ui_language._windows_ui_language", return_value="en"):
             self.assertEqual(self.call(doctor.check_language)[0], "PASS")

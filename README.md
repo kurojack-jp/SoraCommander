@@ -82,17 +82,20 @@ unsupported for general use. Every command it receives still opens the approval 
 | Configuration | Registered tools |
 | --- | ---: |
 | ChatGPT, started with the included launchers (Broker mode or usual mode; the edit/create pilot is on) | 49 |
+| ChatGPT, started with a VM launcher and a valid VM configuration (edit/create pilot on) | 58 |
 | ChatGPT Host with DEV write tools on | 48 (54 with the edit/create pilot) |
 | ChatGPT Host with both opt-ins off | 43 |
 | Muse read-only bridge | 36, or 37 with `--inbox` |
 
-## New in v0.6.2
+## Optional: VM screen control
 
-Small fixes and a clearer README. The tool count is unchanged (49 with the bundled launchers).
+With one session approval, ChatGPT can view and use a Hyper-V VM you own and transfer files through two dedicated folders. Screens and files from the VM can reach ChatGPT. Use a dedicated offline guest with sample data. [VM screen control guide](docs/vm-control.md)
 
-- **Setup names the Muse-only next step.** When only the Muse bridge is left to set up, `tools\setup.cmd` now tells you to copy `docs\muse-bridge-peers.example.json` to `%USERPROFILE%\.config\sora-commander\muse-bridge-peers.json` and put your Muse agent's StableID in `readonly`.
-- **Update stops clearly when packages cannot be checked.** If `tools\update.cmd` has moved the code to the new release tag but cannot verify the packages offline, it stops (HOLD) and tells you to run `tools\setup.cmd` before restarting.
-- **README:** an approval table, a quick start, "Who it's for", an FAQ and a Windows tests badge. Release history moved to CHANGELOG.md.
+## New in v0.7.0
+
+Developer preview with optional Hyper-V VM screen control and file transfer. The bundled launchers register 49 tools, and the VM launchers register 58 with a valid VM configuration and the edit/create pilot on.
+
+- The Host and Muse bridge skip missing allowed folders with a warning. The setup check and Config Builder report them as well.
 
 Earlier releases: see [CHANGELOG.md](CHANGELOG.md).
 
@@ -275,17 +278,20 @@ Brokerのパイプが用意できるまで待ってからトンネルを起動�
 | 構成 | 登録ツール数 |
 | --- | ---: |
 | ChatGPT（同梱のランチャーで起動。Broker モードでも通常モードでも、編集・作成 pilot はオン） | 49 |
+| ChatGPT（VM 用ランチャーと有効な VM 設定で起動。編集・作成 pilot はオン） | 58 |
 | DEV書き込みツールをオンにした ChatGPT 用 Host | 48（編集・作成 pilot もオンなら54） |
 | DEV 書き込みツールと編集・作成 pilot を両方オフにした ChatGPT 用 Host | 43 |
 | 読み取り専用 Muse ブリッジ | 36（`--inbox` 付きは 37） |
 
-## v0.6.2 の変更
+### 任意：VM の画面を操作する
 
-小さな直しと、分かりやすくした README です。ツール数は変わりません（同梱のランチャーで 49）。
+セッションを 1 回承認すると、ChatGPT が自分の Hyper-V VM の画面を見て操作し、専用の 2 フォルダを通してファイルをやり取りできます。VM の画面やファイルは ChatGPT に届くことがあります。ネットから切り離した専用の VM に、サンプルだけを入れて使ってください。[VM 操作の手順](docs/vm-control.ja.md)
 
-- **setup が、Muse だけ残ったときの次の手順を示します。** 残りが Muse ブリッジの設定だけのとき、`tools\setup.cmd` は次の手順を示します。`docs\muse-bridge-peers.example.json` を `%USERPROFILE%\.config\sora-commander\muse-bridge-peers.json` にコピーし、Muse のエージェントの StableID を `readonly` に書きます。
-- **パッケージを確かめられないとき、update ははっきり止まります。** `tools\update.cmd` がコードを新しいリリースのタグへ動かしたあと、パッケージをオフラインで確かめられなかった場合は、止まって（HOLD）、再起動の前に `tools\setup.cmd` を実行するよう伝えます。
-- **README：** 承認のしくみの表、クイックスタート、向いている人、よくある質問、Windows テストのバッジを足しました。変更履歴は CHANGELOG.ja.md に移しました。
+## v0.7.0 の変更
+
+任意で Hyper-V VM の画面操作とファイル転送を使える開発者プレビューです。通常の同梱ランチャーは 49 ツール、有効な VM 設定があり編集・作成 pilot がオンの場合は VM 用ランチャーで 58 ツールが登録されます。
+
+- Host と Muse ブリッジは、見つからない許可フォルダを警告付きでスキップします。セットアップの確認と Config Builder でも不足を報告します。
 
 これまでの変更は [CHANGELOG.ja.md](CHANGELOG.ja.md) を見てください。
 

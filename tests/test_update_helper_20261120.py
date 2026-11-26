@@ -236,6 +236,7 @@ class UpdateHelperTests(unittest.TestCase):
         for launcher in (
             "start-broker.cmd", "start-broker-tunnel.cmd", "start-usual-mode.cmd",
             "mcp-broker-client.cmd", "mcp-direct.cmd",
+            "mcp-broker-client-vm.cmd", "mcp-direct-vm.cmd", "start-vm-tunnel.cmd",
             "start-owner-broker-dev.cmd", "start-sora-commander-broker-dev.cmd",
             "start-sora-commander-local.cmd", "next-development-broker-client.cmd",
             "next-development.cmd",
@@ -250,6 +251,22 @@ class UpdateHelperTests(unittest.TestCase):
         self.processes[-1]["CommandLine"] = "cmd.exe /d /c tools/mcp-direct.cmd.bak"
         self.assertEqual(self.invoke("--check"), 0)
         self.assertEqual(self.mutations(), ["fetch"])
+
+    def test_vm_lease_holds_without_fetch_or_merge(self):
+        from pathlib import PureWindowsPath
+
+        root = PureWindowsPath(self.root)
+        lease = root / "src/sora_commander_next/vm_lease.py"
+        local_python = root / ".venv/Scripts/python.exe"
+        for exe, script in ((local_python, lease.name), ("python.exe", lease)):
+            with self.subTest(exe=exe, script=script):
+                self.processes[-1] = {
+                    "Name": "python.exe", "ProcessId": 25,
+                    "ExecutablePath": None,
+                    "CommandLine": f'"{exe}" -I "{script}" --lease-id fixture',
+                }
+                self.assertEqual(self.invoke(), 2)
+                self.assertEqual(self.mutations(), [])
 
     def test_either_running_task_holds_without_merge(self):
         for name in scn_update.LOGON_TASKS:

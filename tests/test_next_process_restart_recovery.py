@@ -1,18 +1,24 @@
 """Recovery across separate Python processes without command replay."""
 import json
+import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from tests._inherited_test_temp import inherited_test_temp
 ROOT=Path(__file__).resolve().parents[1]
 PYTHON=str(ROOT/'.venv'/'Scripts'/'python.exe')
 SRC=str(ROOT/'src')
 
 class SeparateProcessRecovery(unittest.TestCase):
     def test_running_becomes_interrupted_unknown_across_processes(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        if not Path(PYTHON).is_file():
+            reason = "checkout .venv interpreter is absent"
+            print(f"[SKIP] process restart recovery: {reason}")
+            self.skipTest(reason)
+        with inherited_test_temp() as tmp:
             path=Path(tmp)/'journal.json'
+            env = dict(os.environ, USERPROFILE=str(tmp), LOCALAPPDATA=str(tmp), HOME=str(tmp))
             write_code=("import sys;sys.path.insert(0,sys.argv[2]);"
                         "from sora_commander_next.session_journal import write_snapshot;"
                         "write_snapshot(sys.argv[1],[dict(session_id='c'*48,status='RUNNING',"
@@ -21,8 +27,8 @@ class SeparateProcessRecovery(unittest.TestCase):
                        "from sora_commander_next.jobs import JobManager;"
                        "m=JobManager(journal_path=sys.argv[1]);"
                        "print(json.dumps({'old':m.previous_sessions(),'current':m.list_sessions()}));m.close()")
-            subprocess.run([PYTHON,'-c',write_code,str(path),SRC],check=True,capture_output=True,timeout=10)
-            run=subprocess.run([PYTHON,'-c',load_code,str(path),SRC],check=True,capture_output=True,text=True,timeout=10)
+            subprocess.run([PYTHON,'-c',write_code,str(path),SRC],check=True,capture_output=True,timeout=10,env=env)
+            run=subprocess.run([PYTHON,'-c',load_code,str(path),SRC],check=True,capture_output=True,text=True,timeout=10,env=env)
             result=json.loads(run.stdout)
             self.assertEqual(result['old']['sessions'][0]['status'],'INTERRUPTED_UNKNOWN')
             self.assertEqual(result['current']['count'],0)

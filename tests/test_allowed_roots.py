@@ -62,6 +62,28 @@ class RootRuleTests(unittest.TestCase):
                 self.assertRaises(roots.AllowedRootsError):
             self.validate("C:/PROGRA~1/App")
 
+    def test_missing_roots_are_checked_in_both_orders_and_modes(self):
+        parent = Path("C:/Work/Long Project")
+        alias = Path("C:/Work/LONGPR~1")
+        dir_info = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0)
+        child = alias / "New" / "Notes"
+        for reading in (True, False):
+            for reverse in (True, False):
+                lines = (str(parent).swapcase(), str(child))
+                lines = tuple(("read:" if index == int(reading) else "") + value
+                              for index, value in enumerate(lines))
+                if reverse:
+                    lines = lines[::-1]
+                with self.subTest(lines=lines), \
+                        patch.object(Path, "lstat", autospec=True,
+                                     side_effect=lambda path: dir_info if path != child.parent
+                                     else Mock(side_effect=FileNotFoundError)()), \
+                        patch.object(Path, "resolve", autospec=True,
+                                     side_effect=lambda path, **_: parent if path == alias else path):
+                    with self.assertRaisesRegex(roots.AllowedRootsError,
+                                                "^allowed-roots line 2: full and read-only folders overlap$"):
+                        roots.parse_allowed_roots("\n".join(lines).encode(), self.env)
+
     def test_plain_path_rejects_files_and_ancestor_reparse_points(self):
         directory = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0, st_nlink=1)
         file = SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=0, st_nlink=1)
@@ -135,6 +157,38 @@ class RootConfigTests(unittest.TestCase):
         self.assertEqual(snapshot, roots.AllowedRoots(
             (str(Path("C:/Work/One")), str(Path("C:/Work/Two"))), (str(Path("C:/Work/Notes")),)))
 
+    def test_created_folder_only_enters_the_next_snapshot(self):
+        present, future = self.scratch / "present", self.scratch / "future"
+        present.mkdir()
+        self.config.write_text(f"{present}\nread: {future}\n", encoding="utf-8")
+        denied = roots._read_name_denied
+        with patch.object(roots, "_read_name_denied",
+                          side_effect=lambda name: name.casefold() != "temp" and denied(name)), \
+                patch.object(roots, "_plain_path", side_effect=self.real_plain):
+            snapshot = self.load()
+            future.mkdir()
+            next_snapshot = self.load()
+        self.assertEqual((snapshot.read, snapshot.skipped), ((str(present.resolve()),), (2,)))
+        self.assertEqual((next_snapshot.read_only, next_snapshot.skipped), ((str(future.resolve()),), ()))
+
+    def test_missing_read_child_refuses_full_parent_before_child_is_created(self):
+        parent = self.scratch / "parent"
+        parent.mkdir()
+        child = parent / "received"
+        self.config.write_text(f"{parent}\nread:{child}\n", encoding="utf-8")
+        denied = roots._read_name_denied
+        with patch.object(roots, "_read_name_denied",
+                          side_effect=lambda name: name.casefold() != "temp" and denied(name)), \
+                patch.object(roots, "_plain_path", side_effect=self.real_plain):
+            with self.assertRaisesRegex(roots.AllowedRootsError, "full and read-only folders overlap"):
+                self.load()
+            child.mkdir()
+            with self.assertRaisesRegex(roots.AllowedRootsError, "full and read-only folders overlap"):
+                self.load()
+            self.config.write_text(f"read:{child}\n", encoding="utf-8")
+            snapshot = self.load()
+        self.assertEqual((snapshot.full, snapshot.read_only), ((), (str(child.resolve()),)))
+
     def test_one_bad_line_refuses_every_entry(self):
         self.config.write_text("# comment\nC:/Work/Good\nrelative-secret-value\n", encoding="utf-8")
         with self.assertRaises(roots.AllowedRootsError) as caught:
@@ -164,7 +218,7 @@ class RootConfigTests(unittest.TestCase):
 class RootCompositionTests(unittest.TestCase):
     def test_stdio_uses_the_same_startup_snapshot_once(self):
         from sora_commander_next import stdio_main
-        selected = roots.AllowedRoots((str(Path("C:/Work/One")),), (str(Path("C:/Work/Two")),))
+        selected = roots.AllowedRoots((str(Path("C:/Work/One")),), (str(Path("C:/Work/Two")),), (2, 7))
         guard = SimpleNamespace(sid="synthetic-owner", verify=Mock())
         with patch.dict(os.environ, {"SORA_NEXT_OWNER_REVIEW_PILOT": "1",
                                      "SORA_NEXT_OWNER_PROFILE": "development"}, clear=True), \
@@ -173,7 +227,8 @@ class RootCompositionTests(unittest.TestCase):
                 patch("sora_commander_next.owner_review_dispatch.OwnerReviewDispatcher"), \
                 patch.object(stdio_main.Host, "attach_owner_review_local"), \
                 patch.object(stdio_main, "startup_allowed_roots", return_value=selected) as loaded, \
-                patch.object(stdio_main, "serve_stdio") as serve:
+                patch.object(stdio_main, "serve_stdio") as serve, \
+                patch("sys.stderr", new_callable=io.StringIO) as warnings:
             stdio_main.main()
             host = serve.call_args.args[0]
             try:
@@ -181,6 +236,9 @@ class RootCompositionTests(unittest.TestCase):
                 self.assertEqual(host.policy.read_only_roots, selected.read_only)
                 self.assertEqual(host.policy.read_roots, selected.read)
                 self.assertEqual(loaded.call_count, 1)
+                self.assertEqual(warnings.getvalue().splitlines(), [
+                    f"[WARN] allowed-roots line {line}: folder does not exist; skipped until the next start"
+                    for line in (2, 7)])
             finally:
                 host.close()
 
@@ -190,14 +248,23 @@ class RootCompositionTests(unittest.TestCase):
         host.jobs._ledger = None
         host.policy.roots = ("private-folder-one", "private-folder-two")
         host.policy.read_only_roots = ("private-read-folder",)
+        selected = roots.AllowedRoots(host.policy.roots, host.policy.read_only_roots, (7,))
         guard = SimpleNamespace(sid="synthetic-owner", verify=Mock())
         with patch.object(backend, "OwnerSessionGuard", return_value=guard), \
-                patch.object(backend, "build_backend_host", return_value=host), \
+                patch.object(backend, "startup_allowed_roots", return_value=selected), \
+                patch.object(backend, "Policy"), \
+                patch.object(backend, "Host", return_value=host), \
+                patch.object(backend, "WindowsOwnerController"), \
+                patch.object(backend, "OwnerReviewDispatcher"), \
                 patch.object(backend, "OwnerBrokerBackend"), \
                 patch.object(backend, "OwnerBrokerService"), \
                 patch.object(backend, "OwnerBrokerPipeServer") as server, \
                 patch.object(backend.sys, "stdin", []), \
-                patch.object(backend.sys, "stdout", new_callable=io.StringIO) as output,                 isolated_owner_lease():
+                patch.object(backend.sys, "stdout", new_callable=io.StringIO) as output, \
+                patch.object(backend.sys, "stderr", new_callable=io.StringIO) as warnings, \
+                isolated_owner_lease():
+            server.return_value.start.side_effect = lambda: self.assertEqual(
+                warnings.getvalue(), "[WARN] allowed-roots line 7: folder does not exist; skipped until the next start\n")
             self.assertEqual(backend.main(
                 ["--pipe-name", "\\\\.\\pipe\\SoraCommanderNext-Test-synthetic-pipe"]), 0)
             self.assertIn("[INFO] Allowed folders: 2 full, 1 read-only for file tools", output.getvalue())
@@ -223,10 +290,14 @@ class RootCompositionTests(unittest.TestCase):
             finally:
                 host.close()
             back_roots.assert_called_once_with("C:/Checkout", "development", env)
-        with patch.object(client, "startup_allowed_roots", return_value=selected) as client_roots, \
+        with patch.object(client, "startup_allowed_roots", return_value=
+                          roots.AllowedRoots(selected.full, selected.read_only, (7,))) as client_roots, \
                 patch.object(client, "OwnerBrokerPipeClient") as pipe, \
-                patch.object(client, "DevBrokerHost") as factory:
+                patch.object(client, "DevBrokerHost") as factory, \
+                patch("sys.stderr", new_callable=io.StringIO) as warnings:
             client.build_client_host(guard, "C:/Checkout", env, pipe_name="synthetic-pipe")
+            self.assertEqual(warnings.getvalue(),
+                             "[WARN] allowed-roots line 7: folder does not exist; skipped until the next start\n")
             self.assertEqual(factory.call_args.kwargs["read_roots"], selected.full)
             self.assertEqual(factory.call_args.kwargs["read_only_roots"], selected.read_only)
             client_roots.assert_called_once_with("C:/Checkout", "development", env)

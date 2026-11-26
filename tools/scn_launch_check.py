@@ -138,6 +138,26 @@ def port_listening(port):
     return ipv4 or ipv6
 
 
+def check_allowed_roots(checkout):
+    sys.path.insert(0, str(checkout / "src"))
+    try:
+        from sora_commander_next.allowed_roots import (
+            AllowedRootsError, MISSING_FOLDER, startup_allowed_roots)
+        try:
+            roots = startup_allowed_roots(checkout, "development")
+        except AllowedRootsError as error:
+            print(f"{error.line}: {error.reason}")
+            return 9
+    except (ImportError, OSError, ValueError, RuntimeError):
+        print("0: configuration unavailable or invalid")
+        return 9
+    finally:
+        sys.path.pop(0)
+    for line in roots.skipped:
+        print(f"{line}: {MISSING_FOLDER}")
+    return 8 if roots.skipped else 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--tunnel-absent", action="store_true")
@@ -145,6 +165,8 @@ def main(argv=None):
     parser.add_argument("--wait-broker", type=int, metavar="SECONDS")
     parser.add_argument("--port-free", type=int, metavar="PORT")
     parser.add_argument("--port-listening", type=int, metavar="PORT")
+    parser.add_argument("--allowed-roots", action="store_true",
+                        help="check allowed folders (0 valid, 8 skipped, 9 refused)")
     args = parser.parse_args(argv)
     if args.wait_broker is not None and not 1 <= args.wait_broker <= 120:
         parser.error("SECONDS must be between 1 and 120")
@@ -152,7 +174,12 @@ def main(argv=None):
         parser.error("PORT must be between 1 and 65535")
     if not any(vars(args).values()):
         parser.error("select at least one launch check")
-    if message := checkout_path_hold(Path(__file__).absolute().parents[1]):
+    checkout = Path(__file__).absolute().parents[1]
+    if args.allowed_roots:
+        if any(value for key, value in vars(args).items() if key != "allowed_roots"):
+            parser.error("--allowed-roots must be used by itself")
+        return check_allowed_roots(checkout)
+    if message := checkout_path_hold(checkout):
         print(f"[HOLD] {message}")
         return 6
 

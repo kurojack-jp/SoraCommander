@@ -53,13 +53,14 @@ class BridgeTests(unittest.TestCase):
               patch("sora_commander_next.allowed_roots._locations",
                     return_value=(profile, config, (), ())),
               patch("sora_commander_next.allowed_roots.startup_allowed_roots",
-                    return_value=AllowedRoots((), (str(ROOT),))),
+                    return_value=AllowedRoots((), (str(ROOT),), (7,))),
               patch("sora_commander_next.owner_journal_lease.owner_journal_lease",
                     return_value=nullcontext()),
               patch("sora_commander_next.mcp_adapter.build_server", side_effect=capture),
               patch("tools.scn_muse_inbox._check_folder"),
               patch.object(bridge, "transport_lists", return_value=([], [])),
               patch("uvicorn.run") as listen,
+              redirect_stderr(io.StringIO()) as warnings,
               redirect_stdout(io.StringIO()) as output):
             lstat.side_effect = lambda path: None if path == config else _LSTAT(path)
             for enabled in (False, True):
@@ -69,6 +70,8 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual("inbox_drop" in names, enabled)
                 counts.append(len(names))
             self.assertEqual(listen.call_count, 2)
+            self.assertEqual(warnings.getvalue().splitlines(),
+                             ["[WARN] allowed-roots line 7: folder does not exist; skipped until the next start"] * 2)
             self.assertEqual(output.getvalue().count(
                 "[bridge] read-only, plus one write-only inbox folder."), 1)
         self.assertEqual(counts, [36, 37])

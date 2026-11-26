@@ -25,6 +25,16 @@ Include what you did, what you expected, and what happened. Remove keys, private
 - **Your account with OpenAI or ChatGPT.** While your connector is running, anyone who can use the account can read permitted files without a window. Requests subject to local review still require your decision. The optional logon task makes the connector available when you sign in.
 - **A different command with the same effect.** The repeat check compares exact commands.
 
+## Optional VM screen control
+
+A Hyper-V VM is not a perfect wall. VM screenshots go to ChatGPT, and VM files can reach ChatGPT if you allow the receive folder to be read. Keep real accounts, credentials and private data out of the guest, and keep the guest off the Internet and your LAN. Treat everything shown on the VM screen and everything it sends as untrusted.
+
+The host firewall blocks all inbound connections from the VM's subnet.
+
+Create a separate key for each VM and use it only for that VM. The guest holds a copy, so software in the guest could read it and impersonate the agent. Delete the temporary copies after setup. The key does not grant approval on the host.
+
+The host requires session approval and enforces the configured time and input limits, up to 30 minutes or 200 inputs. The always-on-top Stop window lets you end access early. Locking the host blocks VM operations while the Owner desktop is unavailable. VM file tools use only the configured host send and receive folders and the guest inbox and outbox. VM screen and input tools cannot see or control the host desktop, read the host clipboard or browse host files. ChatGPT's separately enabled Host tools still follow their own allowed folders and approval rules. [VM screen control guide](docs/vm-control.md)
+
 ## Your key
 
 Your tunnel key is stored as plain text in `%USERPROFILE%\.config\tunnel-client\sora-next.key`. Do not paste it into a chat, a command line or an issue. If it may have leaked, revoke it at OpenAI and make a new one.

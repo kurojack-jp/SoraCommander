@@ -94,6 +94,7 @@ Tailscaleの管理画面で`muse`の機器を削除し、`muse-bridge-peers.json
 | エージェントに`run_command`・`run_task`などのコマンド用ツールがない | 想定どおり。読み取り専用ブリッジはコマンド用ツールを一覧に出さず、名前を指定して呼んでも何も実行せずに拒否する | 何もしない。読み取り用のツールを使う |
 | `[HOLD] allowed-roots.txt is missing` | 読み取り専用ブリッジにはフォルダーの指定が必要 | `allowed-roots.txt`を作成し、公開するフォルダーを記載してブリッジを再起動する |
 | `[HOLD] allowed-roots.txt: allowed-roots line N: ...` | フォルダ一覧のN行目が不正 | その行を手で直し、ブリッジを再起動する |
+| `[WARN] allowed-roots line N: folder does not exist; skipped until the next start` | N行目のフォルダが存在しないため、起動時に残りの使用できるフォルダを使う | そのフォルダを許可するには、作成してからブリッジを再起動する |
 | `[HOLD] muse-bridge-peers.json still has the example ID` | 例のStableIDを置き換えていない | `readonly`にエージェント自身のStableIDを入れる |
 | `bridge_digest` で `GIT_NOT_INSTALLED` | Git for Windows が `C:\Program Files\Git` にない | Git を既定のフォルダに入れる |
 | `bridge_digest` で `CHECKOUT_NOT_IN_READ_ROOTS` | チェックアウトが読み取り許可フォルダに含まれていない | Git の要約が必要なら、チェックアウトを `allowed-roots.txt` に追加する |

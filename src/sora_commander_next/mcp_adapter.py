@@ -1125,10 +1125,37 @@ Use to inspect only the local FastMCP tool registration count, names and schema 
     return server
 
 
-def serve_stdio(host: Host, *, dev_write_tools_enabled=False):
+def startup_vm_config(*, dev_host):
+    """Resolve the local VM opt-in before composing a stdio Host."""
+    import os
+
+    if os.environ.get("SORA_NEXT_VM_TOOLS") != "1":
+        return None
+    from .vm_control import VmConfigurationError, load_vm_control
+
+    try:
+        config = load_vm_control()
+    except VmConfigurationError:
+        print("[HOLD] vm-control.json: invalid or unreadable configuration", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
+    if config is None:
+        print("[INFO] VM tools: off (no vm-control.json)", file=sys.stderr, flush=True)
+    elif not dev_host or os.environ.get("SORA_NEXT_PRODUCT_BROKER") == "1":
+        print("[HOLD] vm-control.json: DEV Host required", file=sys.stderr, flush=True)
+        raise SystemExit(2)
+    return config
+
+
+def serve_stdio(host: Host, *, dev_write_tools_enabled=False, vm_config=None):
     """Own a disposable host until EOF; explicit invocation only, no listener."""
     try:
-        build_server(host, dev_write_tools_enabled=dev_write_tools_enabled).run(transport="stdio")
+        server = build_server(host, dev_write_tools_enabled=dev_write_tools_enabled)
+        if vm_config is not None:
+            from .vm_control import register_vm_tools
+            from .windows_owner import OwnerSessionGuard
+
+            register_vm_tools(server, host, vm_config, OwnerSessionGuard())
+        server.run(transport="stdio")
     finally:
         if type(host) is BrokerHost:
             host.close()  # Connection only. Never cancel/close the Broker's jobs.

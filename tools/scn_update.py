@@ -53,8 +53,8 @@ RELATIVE_MARKERS = re.compile(
     r"(?![\w.-])"
 )
 LAUNCHER_MARKERS = re.compile(
-    r"(?<![\w.-])(?:start-(?:broker(?:-tunnel)?|usual-mode|owner-broker-dev"
-    r"|sora-commander-(?:broker-dev|local))|mcp-(?:broker-client|direct)"
+    r"(?<![\w.-])(?:start-(?:broker(?:-tunnel)?|vm-tunnel|usual-mode|owner-broker-dev"
+    r"|sora-commander-(?:broker-dev|local))|mcp-(?:broker-client|direct)(?:-vm)?"
     r"|next-development(?:-broker-client)?)\.cmd(?![\w.-])"
 )
 LOGON_TASKS = (BROKER_TASK, MUSE_TASK)

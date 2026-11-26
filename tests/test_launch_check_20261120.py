@@ -26,6 +26,49 @@ class LaunchCheckTests(unittest.TestCase):
             code = check.main(args)
         return code, out.getvalue().splitlines()
 
+    def test_allowed_roots_codes_and_exact_path_free_lines(self):
+        from sora_commander_next import allowed_roots
+        from tests._inherited_test_temp import inherited_test_temp
+
+        with inherited_test_temp() as scratch:
+            base = Path(scratch)
+            checkout = base / "checkout"
+            checkout.mkdir()
+            profile = base / "profile"
+            config = profile / ".config/sora-commander/allowed-roots.txt"
+            config.parent.mkdir(parents=True)
+            present = base / "usable"
+            present.mkdir()
+            future = base / "private-missing"
+            env = {"USERPROFILE": str(profile), "LOCALAPPDATA": str(base / "local")}
+            denied = allowed_roots._read_name_denied
+            with patch.dict(os.environ, env), patch.object(check, "__file__", str(checkout / "tools/check.py")), \
+                    patch.object(allowed_roots, "_read_name_denied",
+                    side_effect=lambda name: name.casefold() != "temp" and denied(name)):
+                self.assertEqual(self.invoke("--allowed-roots"), (0, []))
+                for data, result in (
+                    (f"{present}\n", (0, [])),
+                     (f"# comment\n{future}\n{present}\nread: {base / 'private-other' / 'child'}", (8, [
+                        "2: folder does not exist", "4: folder does not exist"])),
+                     (f"read: {present}\n{present / 'private-missing'}", (9, [
+                         "2: full and read-only folders overlap"])),
+                    (f"{future}\n", (9, ["0: no folders configured"])),
+                    (f"{present}\nrelative-private-value", (9, ["2: absolute local path required"])),
+                    (b"# comment\n\xff", (9, ["2: invalid UTF-8"])),
+                ):
+                    with self.subTest(result=result):
+                        config.write_bytes(data.encode() if isinstance(data, str) else data)
+                        self.assertEqual(self.invoke("--allowed-roots"), result)
+
+    def test_allowed_roots_option_cannot_run_other_checks(self):
+        with patch.object(check, "tunnel_present") as query, \
+                patch.object(check, "check_allowed_roots") as roots, \
+                redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            check.main(["--allowed-roots", "--tunnel-absent"])
+        self.assertEqual(error.exception.code, 2)
+        query.assert_not_called()
+        roots.assert_not_called()
+
     def test_toolhelp_snapshot_matches_complete_executable_name(self):
         for name, expected in (("TUNNEL-Client.EXE", 3), ("old-tunnel-client.exe", 0)):
             with self.subTest(name=name):
@@ -241,10 +284,15 @@ class PublicLauncherTests(unittest.TestCase):
             "mcp-broker-client.cmd", "mcp-direct.cmd",
             "start-muse-bridge-tailscale.cmd", "install-muse-bridge-autostart.cmd",
             "uninstall-muse-bridge-autostart.cmd",
+            "mcp-direct-vm.cmd", "mcp-broker-client-vm.cmd", "start-vm-tunnel.cmd", "vm-setup.cmd",
+            "vm_guest/check.cmd", "vm_guest/firewall-admin.cmd", "vm_guest/firewall-remove-admin.cmd",
+            "vm_guest/install.cmd", "vm_guest/netcheck.cmd", "vm_guest/remove.cmd",
+            "vm_guest/start-full.cmd", "vm_guest/start-view.cmd", "vm_guest/update.cmd",
         }
         if (ROOT / "tools/build_public_tree.py").is_file():
             from tools.build_public_tree import TOOLS
-            self.assertEqual({Path(path).name for path in TOOLS if path.endswith(".cmd")}, names)
+            self.assertEqual({Path(path).relative_to("tools").as_posix()
+                              for path in TOOLS if path.endswith(".cmd")}, names)
         for name in names:
             with self.subTest(launcher=name):
                 text = (ROOT / "tools" / name).read_text(encoding="utf-8").casefold()

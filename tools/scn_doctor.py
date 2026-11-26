@@ -104,13 +104,14 @@ def check_location(environ, root):
 
 
 def check_roots(environ, root):
-    from sora_commander_next.allowed_roots import startup_allowed_roots, AllowedRootsError
+    from sora_commander_next.allowed_roots import AllowedRootsError, startup_allowed_roots, warn_skipped_roots
     try:
         roots = startup_allowed_roots(root, "development", environ)
+        warn_skipped_roots(roots)
         config = Path(environ["USERPROFILE"]) / ".config/sora-commander/allowed-roots.txt"
         if not config.exists():
             return "WARN", "roots", "default"
-        if any(not Path(folder).is_dir() for folder in roots.read):
+        if roots.skipped or any(not Path(folder).is_dir() for folder in roots.read):
             return "WARN", "roots", "absent"
         return "PASS", "roots", "ok"
     except AllowedRootsError as error:

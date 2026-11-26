@@ -88,6 +88,17 @@ DEV_ONLY_MODULES = frozenset((
     "owner_broker_main.py",  # G2 DEV Broker process; started by hand
     "owner_launch_ledger.py",  # B01 SQLite launch record; Owner-level only
     "owner_broker_client_main.py",  # G2 DEV forwarding Host
+    "vm_agent.py",  # runs inside the VM; no Host imports it
+    "vm_client.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_control.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_files.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_lease.py",  # standalone Owner Stop window process
+    "vm_link.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_protocol.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_transfer.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_transfers.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
+    "vm_uia.py",  # runs inside the VM; no Host imports it
+    "vm_win.py",  # optional VM tools; loaded only with SORA_NEXT_VM_TOOLS=1
     "approval_v2_broker_prepare_offline.py",
     "approval_v2_contract.py",
     "approval_v2_flow_offline.py",

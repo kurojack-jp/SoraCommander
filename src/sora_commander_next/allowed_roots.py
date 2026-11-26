@@ -3,17 +3,20 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 import stat
+import sys
 
 from .file_reads import _is_redirecting_link, _read_name_denied
 
 MAX_ROOTS = 16
 MAX_CONFIG_BYTES = 65536
+MISSING_FOLDER = "folder does not exist"
 
 
 @dataclass(frozen=True)
 class AllowedRoots:
     full: tuple[str, ...]
     read_only: tuple[str, ...] = ()
+    skipped: tuple[int, ...] = ()
 
     @property
     def read(self):
@@ -28,6 +31,17 @@ class AllowedRootsError(ValueError):
         super().__init__(f"allowed-roots line {line}: {reason}")
 
 
+class _MissingFolder(Exception):
+    def __init__(self, path):
+        self.path = path
+
+
+def warn_skipped_roots(roots):
+    for line in getattr(roots, "skipped", ()):
+        print(f"[WARN] allowed-roots line {line}: {MISSING_FOLDER}; skipped until the next start",
+              file=sys.stderr, flush=True)
+
+
 def _linked_configuration(info):
     return (stat.S_ISLNK(info.st_mode)
             or bool(getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
@@ -36,12 +50,22 @@ def _linked_configuration(info):
 def _plain_path(path, *, directory):
     # Inspect the original spelling before resolve can hide a junction.
     for part in (*reversed(path.parents), path):
-        info = part.lstat()
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            if directory:
+                # Resolve only the existing prefix to account for DOS aliases.
+                prefix = part.parent
+                canonical = prefix.resolve(strict=True) if part != prefix else prefix
+                raise _MissingFolder(canonical / path.relative_to(prefix)) from None
+            raise
         linked = (_is_redirecting_link(info, ValueError) if directory
                   else _linked_configuration(info))
         if linked:
             raise ValueError("linked path")
-    if not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
+        if (directory or part != path) and not stat.S_ISDIR(info.st_mode):
+            raise ValueError("wrong object type")
+    if not directory and not stat.S_ISREG(info.st_mode):
         raise ValueError("wrong object type")
     if not directory and info.st_nlink != 1:
         raise ValueError("linked file")
@@ -80,7 +104,7 @@ def _locations(environ):
     return home, config, tuple(blocked), contained
 
 
-def _validate_root(value, line, home, blocked, contained):
+def _validate_root(value, line, home, blocked, contained, *, skip_missing=False):
     reason = "absolute local path required"
     try:
         path = _absolute(value)
@@ -97,8 +121,14 @@ def _validate_root(value, line, home, blocked, contained):
                 or any(_within(path, item) for item in contained[1:])):
             reason = "contains private configuration or state"
             raise ValueError("contains private configuration or state")
-        reason = "folder missing, inaccessible, linked or not a directory"
-        resolved = _plain_path(path, directory=True)
+        reason = "folder inaccessible, linked or not a directory"
+        missing = False
+        try:
+            resolved = _plain_path(path, directory=True)
+        except _MissingFolder as error:
+            if not skip_missing:
+                raise
+            resolved, missing = error.path, True
         # Also check the canonical spelling (including DOS short-name aliases).
         if (any(_read_name_denied(part) for part in resolved.parts[1:])
                 or resolved == home
@@ -107,33 +137,43 @@ def _validate_root(value, line, home, blocked, contained):
                 or any(_within(resolved, item) for item in contained[1:])):
             reason = "protected canonical folder"
             raise ValueError("protected canonical folder")
+        if skip_missing:
+            return resolved, missing
         return str(resolved)
+    except _MissingFolder:
+        raise AllowedRootsError(line, reason) from None
     except (OSError, ValueError, RuntimeError):
         raise AllowedRootsError(line, reason) from None
 
 
 def _parse_roots(text, home, blocked, contained):
-    full, read_only = [], []
+    full, read_only, skipped = [], [], []
+    configured_full, configured_read = [], []
     for line, value in enumerate(text.splitlines(), 1):
         value = value.strip()
         if not value or value.startswith("#"):
             continue
-        if len(full) + len(read_only) == MAX_ROOTS:
-            raise AllowedRootsError(line, "more than 16 folders")
         reading = value.startswith("read:")
         if reading:
             value = value[len("read:"):].lstrip()
-        root = _validate_root(value, line, home, blocked, contained)
+        root, missing = _validate_root(value, line, home, blocked, contained, skip_missing=True)
         # Compare canonical paths, case-insensitively on Windows. A full root
         # must never grant writes inside a root declared read-only (or vice versa).
-        others = full if reading else read_only
-        if any(_within(Path(root), Path(other)) or _within(Path(other), Path(root))
-               for other in others):
+        others = configured_full if reading else configured_read
+        spellings = {Path(value), root}
+        if any(_within(candidate, other) or _within(other, candidate)
+               for candidate in spellings for other in others):
             raise AllowedRootsError(line, "full and read-only folders overlap")
-        (read_only if reading else full).append(root)
+        if not missing and len(full) + len(read_only) == MAX_ROOTS:
+            raise AllowedRootsError(line, "more than 16 folders")
+        (configured_read if reading else configured_full).extend(spellings)
+        if missing:
+            skipped.append(line)
+        else:
+            (read_only if reading else full).append(str(root))
     if not full and not read_only:
         raise AllowedRootsError(0, "no folders configured")
-    return AllowedRoots(tuple(full), tuple(read_only))
+    return AllowedRoots(tuple(full), tuple(read_only), tuple(skipped))
 
 
 def parse_allowed_roots(data, environ=None):

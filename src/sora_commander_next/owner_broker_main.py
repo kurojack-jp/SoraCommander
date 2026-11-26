@@ -22,7 +22,7 @@ from .owner_launch_ledger import DurableJobManager, LaunchLedger, LaunchLedgerEr
 from .owner_review_dispatch import OwnerReviewDispatcher
 from .policy import Policy
 from .stdio_main import owner_journal_path
-from .allowed_roots import AllowedRootsError, startup_allowed_roots
+from .allowed_roots import AllowedRootsError, startup_allowed_roots, warn_skipped_roots
 from .owner_storage import ensure_owner_storage
 from .windows_owner import OwnerSessionGuard
 from .windows_owner_controller import WindowsOwnerController
@@ -69,6 +69,8 @@ def build_backend_host(guard, repo_root, environ):
     """Same composition as the stdio pilot, on the same switches."""
     roots = startup_allowed_roots(
         repo_root, environ.get("SORA_NEXT_OWNER_PROFILE", "tests"), environ)
+    # stderr: stdout's first line must stay [READY] for the scripts and tests that wait on it.
+    warn_skipped_roots(roots)
     jobs = None
     journal_enabled = environ.get("SORA_NEXT_JOURNAL_PILOT") == "1"
     result_enabled = environ.get("SORA_NEXT_RESULT_ARCHIVE_PILOT") == "1"

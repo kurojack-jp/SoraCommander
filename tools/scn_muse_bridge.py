@@ -416,7 +416,7 @@ def main(argv=None) -> int:
 
 def _serve_bridge(args, checkout, token, auth, identity):
     from sora_commander_next.allowed_roots import (
-        AllowedRootsError, _locations, startup_allowed_roots)
+        AllowedRootsError, _locations, startup_allowed_roots, warn_skipped_roots)
     from sora_commander_next.host import Host
     from sora_commander_next.mcp_adapter import build_server
     from sora_commander_next.policy import Policy
@@ -442,6 +442,7 @@ def _serve_bridge(args, checkout, token, auth, identity):
                 # Its fixed message holds a line number and a reason, never a path.
                 print(f"[HOLD] allowed-roots.txt: {error}. Bridge not started.", file=sys.stderr)
                 return 2
+            warn_skipped_roots(roots)
             read_all = tuple(roots.read)
             if not read_all:
                 raise SystemExit("allowed-roots.txt configured no folders; nothing to serve.")
